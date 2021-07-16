@@ -26,8 +26,6 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "dr/FlexDR.h"
-
 #include <omp.h>
 
 #include <boost/io/ios_state.hpp>
@@ -36,8 +34,10 @@
 #include <sstream>
 
 #include "db/infra/frTime.h"
+#include "dr/FlexDR.h"
 #include "dr/FlexDR_graphics.h"
 #include "frProfileTask.h"
+#include "gc/FlexGC.h"
 
 using namespace std;
 using namespace fr;
@@ -60,7 +60,7 @@ void FlexDR::setDebug(frDebugSettings* settings)
             : nullptr;
 }
 
-int FlexDRWorker::main()
+int FlexDRWorker::main(frDesign* design)
 {
   ProfileTask profile("DR:main");
   using namespace std::chrono;
@@ -77,9 +77,17 @@ int FlexDRWorker::main()
     cout << ss.str() << flush;
   }
 
-  init();
+  init(design);
   high_resolution_clock::time_point t1 = high_resolution_clock::now();
-  route_queue();
+  if (!skipRouting_) {
+    FlexGCWorker gcWorker(design->getTech(), logger_, this);
+    gcWorker.setExtBox(getExtBox());
+    gcWorker.setDrcBox(getDrcBox());
+    gcWorker.init(design);
+    gcWorker.setEnableSurgicalFix(true);
+
+    route_queue(gcWorker);
+  }
   high_resolution_clock::time_point t2 = high_resolution_clock::now();
   cleanup();
   high_resolution_clock::time_point t3 = high_resolution_clock::now();
@@ -126,7 +134,7 @@ void FlexDR::initGCell2BoundaryPin()
 {
   // initiailize size
   frBox dieBox;
-  getDesign()->getTopBlock()->getBoundaryBBox(dieBox);
+  getDesign()->getTopBlock()->getDieBox(dieBox);
   auto gCellPatterns = getDesign()->getTopBlock()->getGCellPatterns();
   auto& xgp = gCellPatterns.at(0);
   auto& ygp = gCellPatterns.at(1);
@@ -240,7 +248,7 @@ frCoord FlexDR::init_via2viaMinLen_minimumcut1(frLayerNum lNum,
   frCoord sol = 0;
 
   // check min len in lNum assuming pre dir routing
-  bool isH = (getDesign()->getTech()->getLayer(lNum)->getDir()
+  bool isH = (getTech()->getLayer(lNum)->getDir()
               == frPrefRoutingDirEnum::frcHorzPrefRoutingDir);
 
   bool isVia1Above = false;
@@ -271,8 +279,7 @@ frCoord FlexDR::init_via2viaMinLen_minimumcut1(frLayerNum lNum,
   auto width2 = viaBox2.width();
   auto length2 = viaBox2.length();
 
-  for (auto& con :
-       getDesign()->getTech()->getLayer(lNum)->getMinimumcutConstraints()) {
+  for (auto& con : getTech()->getLayer(lNum)->getMinimumcutConstraints()) {
     if ((!con->hasLength() || (con->hasLength() && length1 > con->getLength()))
         && width1 > con->getWidth()) {
       bool checkVia2 = false;
@@ -377,8 +384,7 @@ bool FlexDR::init_via2viaMinLen_minimumcut2(frLayerNum lNum,
   via2.getCutBBox(cutBox2);
   auto width2 = viaBox2.width();
 
-  for (auto& con :
-       getDesign()->getTech()->getLayer(lNum)->getMinimumcutConstraints()) {
+  for (auto& con : getTech()->getLayer(lNum)->getMinimumcutConstraints()) {
     if (con->hasLength()) {
       continue;
     }
@@ -439,9 +445,9 @@ frCoord FlexDR::init_via2viaMinLen_minSpc(frLayerNum lNum,
   frCoord sol = 0;
 
   // check min len in lNum assuming pre dir routing
-  bool isH = (getDesign()->getTech()->getLayer(lNum)->getDir()
+  bool isH = (getTech()->getLayer(lNum)->getDir()
               == frPrefRoutingDirEnum::frcHorzPrefRoutingDir);
-  frCoord defaultWidth = getDesign()->getTech()->getLayer(lNum)->getWidth();
+  frCoord defaultWidth = getTech()->getLayer(lNum)->getWidth();
 
   frVia via1(viaDef1);
   frBox viaBox1;
@@ -471,7 +477,7 @@ frCoord FlexDR::init_via2viaMinLen_minSpc(frLayerNum lNum,
 
   frCoord reqDist = 0;
   if (isVia1Fat && isVia2Fat) {
-    auto con = getDesign()->getTech()->getLayer(lNum)->getMinSpacing();
+    auto con = getTech()->getLayer(lNum)->getMinSpacing();
     if (con) {
       if (con->typeId() == frConstraintTypeEnum::frcSpacingConstraint) {
         reqDist = static_cast<frSpacingConstraint*>(con)->getMinSpacing();
@@ -511,7 +517,7 @@ frCoord FlexDR::init_via2viaMinLen_minSpc(frLayerNum lNum,
   prl1 = isH ? (viaBox1.top() - viaBox1.bottom())
              : (viaBox1.right() - viaBox1.left());
   reqDist = 0;
-  auto con = getDesign()->getTech()->getLayer(lNum)->getMinSpacing();
+  auto con = getTech()->getLayer(lNum)->getMinSpacing();
   if (con) {
     if (con->typeId() == frConstraintTypeEnum::frcSpacingConstraint) {
       reqDist = static_cast<frSpacingConstraint*>(con)->getMinSpacing();
@@ -537,43 +543,42 @@ frCoord FlexDR::init_via2viaMinLen_minSpc(frLayerNum lNum,
 
 void FlexDR::init_via2viaMinLen()
 {
-  auto bottomLayerNum = getDesign()->getTech()->getBottomLayerNum();
-  auto topLayerNum = getDesign()->getTech()->getTopLayerNum();
+  auto bottomLayerNum = getTech()->getBottomLayerNum();
+  auto topLayerNum = getTech()->getTopLayerNum();
+  auto& via2viaMinLen = via_data_.via2viaMinLen;
   for (auto lNum = bottomLayerNum; lNum <= topLayerNum; lNum++) {
-    if (getDesign()->getTech()->getLayer(lNum)->getType()
-        != frLayerTypeEnum::ROUTING) {
+    if (getTech()->getLayer(lNum)->getType() != frLayerTypeEnum::ROUTING) {
       continue;
     }
     vector<frCoord> via2viaMinLenTmp(4, 0);
     vector<bool> via2viaZeroLen(4, true);
-    via2viaMinLen_.push_back(make_pair(via2viaMinLenTmp, via2viaZeroLen));
+    via2viaMinLen.push_back(make_pair(via2viaMinLenTmp, via2viaZeroLen));
   }
   // check prl
   int i = 0;
   for (auto lNum = bottomLayerNum; lNum <= topLayerNum; lNum++) {
-    if (getDesign()->getTech()->getLayer(lNum)->getType()
-        != frLayerTypeEnum::ROUTING) {
+    if (getTech()->getLayer(lNum)->getType() != frLayerTypeEnum::ROUTING) {
       continue;
     }
     frViaDef* downVia = nullptr;
     frViaDef* upVia = nullptr;
-    if (getDesign()->getTech()->getBottomLayerNum() <= lNum - 1) {
-      downVia = getDesign()->getTech()->getLayer(lNum - 1)->getDefaultViaDef();
+    if (getTech()->getBottomLayerNum() <= lNum - 1) {
+      downVia = getTech()->getLayer(lNum - 1)->getDefaultViaDef();
     }
-    if (getDesign()->getTech()->getTopLayerNum() >= lNum + 1) {
-      upVia = getDesign()->getTech()->getLayer(lNum + 1)->getDefaultViaDef();
+    if (getTech()->getTopLayerNum() >= lNum + 1) {
+      upVia = getTech()->getLayer(lNum + 1)->getDefaultViaDef();
     }
-    (via2viaMinLen_[i].first)[0]
-        = max((via2viaMinLen_[i].first)[0],
+    (via2viaMinLen[i].first)[0]
+        = max((via2viaMinLen[i].first)[0],
               init_via2viaMinLen_minSpc(lNum, downVia, downVia));
-    (via2viaMinLen_[i].first)[1]
-        = max((via2viaMinLen_[i].first)[1],
+    (via2viaMinLen[i].first)[1]
+        = max((via2viaMinLen[i].first)[1],
               init_via2viaMinLen_minSpc(lNum, downVia, upVia));
-    (via2viaMinLen_[i].first)[2]
-        = max((via2viaMinLen_[i].first)[2],
+    (via2viaMinLen[i].first)[2]
+        = max((via2viaMinLen[i].first)[2],
               init_via2viaMinLen_minSpc(lNum, upVia, downVia));
-    (via2viaMinLen_[i].first)[3]
-        = max((via2viaMinLen_[i].first)[3],
+    (via2viaMinLen[i].first)[3]
+        = max((via2viaMinLen[i].first)[3],
               init_via2viaMinLen_minSpc(lNum, upVia, upVia));
     i++;
   }
@@ -581,42 +586,41 @@ void FlexDR::init_via2viaMinLen()
   // check minimumcut
   i = 0;
   for (auto lNum = bottomLayerNum; lNum <= topLayerNum; lNum++) {
-    if (getDesign()->getTech()->getLayer(lNum)->getType()
-        != frLayerTypeEnum::ROUTING) {
+    if (getTech()->getLayer(lNum)->getType() != frLayerTypeEnum::ROUTING) {
       continue;
     }
     frViaDef* downVia = nullptr;
     frViaDef* upVia = nullptr;
-    if (getDesign()->getTech()->getBottomLayerNum() <= lNum - 1) {
-      downVia = getDesign()->getTech()->getLayer(lNum - 1)->getDefaultViaDef();
+    if (getTech()->getBottomLayerNum() <= lNum - 1) {
+      downVia = getTech()->getLayer(lNum - 1)->getDefaultViaDef();
     }
-    if (getDesign()->getTech()->getTopLayerNum() >= lNum + 1) {
-      upVia = getDesign()->getTech()->getLayer(lNum + 1)->getDefaultViaDef();
+    if (getTech()->getTopLayerNum() >= lNum + 1) {
+      upVia = getTech()->getLayer(lNum + 1)->getDefaultViaDef();
     }
     vector<frCoord> via2viaMinLenTmp(4, 0);
-    (via2viaMinLen_[i].first)[0]
-        = max((via2viaMinLen_[i].first)[0],
+    (via2viaMinLen[i].first)[0]
+        = max((via2viaMinLen[i].first)[0],
               init_via2viaMinLen_minimumcut1(lNum, downVia, downVia));
-    (via2viaMinLen_[i].first)[1]
-        = max((via2viaMinLen_[i].first)[1],
+    (via2viaMinLen[i].first)[1]
+        = max((via2viaMinLen[i].first)[1],
               init_via2viaMinLen_minimumcut1(lNum, downVia, upVia));
-    (via2viaMinLen_[i].first)[2]
-        = max((via2viaMinLen_[i].first)[2],
+    (via2viaMinLen[i].first)[2]
+        = max((via2viaMinLen[i].first)[2],
               init_via2viaMinLen_minimumcut1(lNum, upVia, downVia));
-    (via2viaMinLen_[i].first)[3]
-        = max((via2viaMinLen_[i].first)[3],
+    (via2viaMinLen[i].first)[3]
+        = max((via2viaMinLen[i].first)[3],
               init_via2viaMinLen_minimumcut1(lNum, upVia, upVia));
-    (via2viaMinLen_[i].second)[0]
-        = (via2viaMinLen_[i].second)[0]
+    (via2viaMinLen[i].second)[0]
+        = (via2viaMinLen[i].second)[0]
           && init_via2viaMinLen_minimumcut2(lNum, downVia, downVia);
-    (via2viaMinLen_[i].second)[1]
-        = (via2viaMinLen_[i].second)[1]
+    (via2viaMinLen[i].second)[1]
+        = (via2viaMinLen[i].second)[1]
           && init_via2viaMinLen_minimumcut2(lNum, downVia, upVia);
-    (via2viaMinLen_[i].second)[2]
-        = (via2viaMinLen_[i].second)[2]
+    (via2viaMinLen[i].second)[2]
+        = (via2viaMinLen[i].second)[2]
           && init_via2viaMinLen_minimumcut2(lNum, upVia, downVia);
-    (via2viaMinLen_[i].second)[3]
-        = (via2viaMinLen_[i].second)[3]
+    (via2viaMinLen[i].second)[3]
+        = (via2viaMinLen[i].second)[3]
           && init_via2viaMinLen_minimumcut2(lNum, upVia, upVia);
     i++;
   }
@@ -664,8 +668,7 @@ frCoord FlexDR::init_via2viaMinLenNew_minimumcut1(frLayerNum lNum,
   auto width2 = viaBox2.width();
   auto length2 = viaBox2.length();
 
-  for (auto& con :
-       getDesign()->getTech()->getLayer(lNum)->getMinimumcutConstraints()) {
+  for (auto& con : getTech()->getLayer(lNum)->getMinimumcutConstraints()) {
     // check via2cut to via1metal
     // no length OR metal1 shape satisfies --> check via2
     if ((!con->hasLength() || (con->hasLength() && length1 > con->getLength()))
@@ -745,7 +748,7 @@ frCoord FlexDR::init_via2viaMinLenNew_minSpc(frLayerNum lNum,
 
   // check min len in lNum assuming pre dir routing
   bool isCurrDirX = !isCurrDirY;
-  frCoord defaultWidth = getDesign()->getTech()->getLayer(lNum)->getWidth();
+  frCoord defaultWidth = getTech()->getLayer(lNum)->getWidth();
 
   frVia via1(viaDef1);
   frBox viaBox1;
@@ -777,7 +780,7 @@ frCoord FlexDR::init_via2viaMinLenNew_minSpc(frLayerNum lNum,
 
   frCoord reqDist = 0;
   if (isVia1Fat && isVia2Fat) {
-    auto con = getDesign()->getTech()->getLayer(lNum)->getMinSpacing();
+    auto con = getTech()->getLayer(lNum)->getMinSpacing();
     if (con) {
       if (con->typeId() == frConstraintTypeEnum::frcSpacingConstraint) {
         reqDist = static_cast<frSpacingConstraint*>(con)->getMinSpacing();
@@ -817,7 +820,7 @@ frCoord FlexDR::init_via2viaMinLenNew_minSpc(frLayerNum lNum,
   prl1 = isCurrDirX ? (viaBox1.top() - viaBox1.bottom())
                     : (viaBox1.right() - viaBox1.left());
   reqDist = 0;
-  auto con = getDesign()->getTech()->getLayer(lNum)->getMinSpacing();
+  auto con = getTech()->getLayer(lNum)->getMinSpacing();
   if (con) {
     if (con->typeId() == frConstraintTypeEnum::frcSpacingConstraint) {
       reqDist = static_cast<frSpacingConstraint*>(con)->getMinSpacing();
@@ -873,14 +876,10 @@ frCoord FlexDR::init_via2viaMinLenNew_cutSpc(frLayerNum lNum,
 
   // same layer (use samenet rule if exist, otherwise use diffnet rule)
   if (viaDef1->getCutLayerNum() == viaDef2->getCutLayerNum()) {
-    auto samenetCons = getDesign()
-                           ->getTech()
-                           ->getLayer(viaDef1->getCutLayerNum())
-                           ->getCutSpacing(true);
-    auto diffnetCons = getDesign()
-                           ->getTech()
-                           ->getLayer(viaDef1->getCutLayerNum())
-                           ->getCutSpacing(false);
+    auto samenetCons
+        = getTech()->getLayer(viaDef1->getCutLayerNum())->getCutSpacing(true);
+    auto diffnetCons
+        = getTech()->getLayer(viaDef1->getCutLayerNum())->getCutSpacing(false);
     if (!samenetCons.empty()) {
       // check samenet spacing rule if exists
       for (auto con : samenetCons) {
@@ -924,45 +923,37 @@ frCoord FlexDR::init_via2viaMinLenNew_cutSpc(frLayerNum lNum,
     auto layerNum1 = viaDef1->getCutLayerNum();
     auto layerNum2 = viaDef2->getCutLayerNum();
     frCutSpacingConstraint* samenetCon = nullptr;
-    if (getDesign()->getTech()->getLayer(layerNum1)->hasInterLayerCutSpacing(
-            layerNum2, true)) {
-      samenetCon = getDesign()
-                       ->getTech()
-                       ->getLayer(layerNum1)
-                       ->getInterLayerCutSpacing(layerNum2, true);
+    if (getTech()->getLayer(layerNum1)->hasInterLayerCutSpacing(layerNum2,
+                                                                true)) {
+      samenetCon = getTech()->getLayer(layerNum1)->getInterLayerCutSpacing(
+          layerNum2, true);
     }
-    if (getDesign()->getTech()->getLayer(layerNum2)->hasInterLayerCutSpacing(
-            layerNum1, true)) {
+    if (getTech()->getLayer(layerNum2)->hasInterLayerCutSpacing(layerNum1,
+                                                                true)) {
       if (samenetCon) {
         cout << "Warning: duplicate diff layer samenet cut spacing, skipping "
                 "cut spacing from "
              << layerNum2 << " to " << layerNum1 << endl;
       } else {
-        samenetCon = getDesign()
-                         ->getTech()
-                         ->getLayer(layerNum2)
-                         ->getInterLayerCutSpacing(layerNum1, true);
+        samenetCon = getTech()->getLayer(layerNum2)->getInterLayerCutSpacing(
+            layerNum1, true);
       }
     }
     if (samenetCon == nullptr) {
-      if (getDesign()->getTech()->getLayer(layerNum1)->hasInterLayerCutSpacing(
-              layerNum2, false)) {
-        samenetCon = getDesign()
-                         ->getTech()
-                         ->getLayer(layerNum1)
-                         ->getInterLayerCutSpacing(layerNum2, false);
+      if (getTech()->getLayer(layerNum1)->hasInterLayerCutSpacing(layerNum2,
+                                                                  false)) {
+        samenetCon = getTech()->getLayer(layerNum1)->getInterLayerCutSpacing(
+            layerNum2, false);
       }
-      if (getDesign()->getTech()->getLayer(layerNum2)->hasInterLayerCutSpacing(
-              layerNum1, false)) {
+      if (getTech()->getLayer(layerNum2)->hasInterLayerCutSpacing(layerNum1,
+                                                                  false)) {
         if (samenetCon) {
           cout << "Warning: duplicate diff layer diffnet cut spacing, skipping "
                   "cut spacing from "
                << layerNum2 << " to " << layerNum1 << endl;
         } else {
-          samenetCon = getDesign()
-                           ->getTech()
-                           ->getLayer(layerNum2)
-                           ->getInterLayerCutSpacing(layerNum1, false);
+          samenetCon = getTech()->getLayer(layerNum2)->getInterLayerCutSpacing(
+              layerNum1, false);
         }
       }
     }
@@ -986,54 +977,53 @@ frCoord FlexDR::init_via2viaMinLenNew_cutSpc(frLayerNum lNum,
 
 void FlexDR::init_via2viaMinLenNew()
 {
-  auto bottomLayerNum = getDesign()->getTech()->getBottomLayerNum();
-  auto topLayerNum = getDesign()->getTech()->getTopLayerNum();
+  auto bottomLayerNum = getTech()->getBottomLayerNum();
+  auto topLayerNum = getTech()->getTopLayerNum();
+  auto& via2viaMinLenNew = via_data_.via2viaMinLenNew;
   for (auto lNum = bottomLayerNum; lNum <= topLayerNum; lNum++) {
-    if (getDesign()->getTech()->getLayer(lNum)->getType()
-        != frLayerTypeEnum::ROUTING) {
+    if (getTech()->getLayer(lNum)->getType() != frLayerTypeEnum::ROUTING) {
       continue;
     }
     vector<frCoord> via2viaMinLenTmp(8, 0);
-    via2viaMinLenNew_.push_back(via2viaMinLenTmp);
+    via2viaMinLenNew.push_back(via2viaMinLenTmp);
   }
   // check prl
   int i = 0;
   for (auto lNum = bottomLayerNum; lNum <= topLayerNum; lNum++) {
-    if (getDesign()->getTech()->getLayer(lNum)->getType()
-        != frLayerTypeEnum::ROUTING) {
+    if (getTech()->getLayer(lNum)->getType() != frLayerTypeEnum::ROUTING) {
       continue;
     }
     frViaDef* downVia = nullptr;
     frViaDef* upVia = nullptr;
-    if (getDesign()->getTech()->getBottomLayerNum() <= lNum - 1) {
-      downVia = getDesign()->getTech()->getLayer(lNum - 1)->getDefaultViaDef();
+    if (getTech()->getBottomLayerNum() <= lNum - 1) {
+      downVia = getTech()->getLayer(lNum - 1)->getDefaultViaDef();
     }
-    if (getDesign()->getTech()->getTopLayerNum() >= lNum + 1) {
-      upVia = getDesign()->getTech()->getLayer(lNum + 1)->getDefaultViaDef();
+    if (getTech()->getTopLayerNum() >= lNum + 1) {
+      upVia = getTech()->getLayer(lNum + 1)->getDefaultViaDef();
     }
-    via2viaMinLenNew_[i][0]
-        = max(via2viaMinLenNew_[i][0],
+    via2viaMinLenNew[i][0]
+        = max(via2viaMinLenNew[i][0],
               init_via2viaMinLenNew_minSpc(lNum, downVia, downVia, false));
-    via2viaMinLenNew_[i][1]
-        = max(via2viaMinLenNew_[i][1],
+    via2viaMinLenNew[i][1]
+        = max(via2viaMinLenNew[i][1],
               init_via2viaMinLenNew_minSpc(lNum, downVia, downVia, true));
-    via2viaMinLenNew_[i][2]
-        = max(via2viaMinLenNew_[i][2],
+    via2viaMinLenNew[i][2]
+        = max(via2viaMinLenNew[i][2],
               init_via2viaMinLenNew_minSpc(lNum, downVia, upVia, false));
-    via2viaMinLenNew_[i][3]
-        = max(via2viaMinLenNew_[i][3],
+    via2viaMinLenNew[i][3]
+        = max(via2viaMinLenNew[i][3],
               init_via2viaMinLenNew_minSpc(lNum, downVia, upVia, true));
-    via2viaMinLenNew_[i][4]
-        = max(via2viaMinLenNew_[i][4],
+    via2viaMinLenNew[i][4]
+        = max(via2viaMinLenNew[i][4],
               init_via2viaMinLenNew_minSpc(lNum, upVia, downVia, false));
-    via2viaMinLenNew_[i][5]
-        = max(via2viaMinLenNew_[i][5],
+    via2viaMinLenNew[i][5]
+        = max(via2viaMinLenNew[i][5],
               init_via2viaMinLenNew_minSpc(lNum, upVia, downVia, true));
-    via2viaMinLenNew_[i][6]
-        = max(via2viaMinLenNew_[i][6],
+    via2viaMinLenNew[i][6]
+        = max(via2viaMinLenNew[i][6],
               init_via2viaMinLenNew_minSpc(lNum, upVia, upVia, false));
-    via2viaMinLenNew_[i][7]
-        = max(via2viaMinLenNew_[i][7],
+    via2viaMinLenNew[i][7]
+        = max(via2viaMinLenNew[i][7],
               init_via2viaMinLenNew_minSpc(lNum, upVia, upVia, true));
     i++;
   }
@@ -1041,41 +1031,40 @@ void FlexDR::init_via2viaMinLenNew()
   // check minimumcut
   i = 0;
   for (auto lNum = bottomLayerNum; lNum <= topLayerNum; lNum++) {
-    if (getDesign()->getTech()->getLayer(lNum)->getType()
-        != frLayerTypeEnum::ROUTING) {
+    if (getTech()->getLayer(lNum)->getType() != frLayerTypeEnum::ROUTING) {
       continue;
     }
     frViaDef* downVia = nullptr;
     frViaDef* upVia = nullptr;
-    if (getDesign()->getTech()->getBottomLayerNum() <= lNum - 1) {
-      downVia = getDesign()->getTech()->getLayer(lNum - 1)->getDefaultViaDef();
+    if (getTech()->getBottomLayerNum() <= lNum - 1) {
+      downVia = getTech()->getLayer(lNum - 1)->getDefaultViaDef();
     }
-    if (getDesign()->getTech()->getTopLayerNum() >= lNum + 1) {
-      upVia = getDesign()->getTech()->getLayer(lNum + 1)->getDefaultViaDef();
+    if (getTech()->getTopLayerNum() >= lNum + 1) {
+      upVia = getTech()->getLayer(lNum + 1)->getDefaultViaDef();
     }
-    via2viaMinLenNew_[i][0]
-        = max(via2viaMinLenNew_[i][0],
+    via2viaMinLenNew[i][0]
+        = max(via2viaMinLenNew[i][0],
               init_via2viaMinLenNew_minimumcut1(lNum, downVia, downVia, false));
-    via2viaMinLenNew_[i][1]
-        = max(via2viaMinLenNew_[i][1],
+    via2viaMinLenNew[i][1]
+        = max(via2viaMinLenNew[i][1],
               init_via2viaMinLenNew_minimumcut1(lNum, downVia, downVia, true));
-    via2viaMinLenNew_[i][2]
-        = max(via2viaMinLenNew_[i][2],
+    via2viaMinLenNew[i][2]
+        = max(via2viaMinLenNew[i][2],
               init_via2viaMinLenNew_minimumcut1(lNum, downVia, upVia, false));
-    via2viaMinLenNew_[i][3]
-        = max(via2viaMinLenNew_[i][3],
+    via2viaMinLenNew[i][3]
+        = max(via2viaMinLenNew[i][3],
               init_via2viaMinLenNew_minimumcut1(lNum, downVia, upVia, true));
-    via2viaMinLenNew_[i][4]
-        = max(via2viaMinLenNew_[i][4],
+    via2viaMinLenNew[i][4]
+        = max(via2viaMinLenNew[i][4],
               init_via2viaMinLenNew_minimumcut1(lNum, upVia, downVia, false));
-    via2viaMinLenNew_[i][5]
-        = max(via2viaMinLenNew_[i][5],
+    via2viaMinLenNew[i][5]
+        = max(via2viaMinLenNew[i][5],
               init_via2viaMinLenNew_minimumcut1(lNum, upVia, downVia, true));
-    via2viaMinLenNew_[i][6]
-        = max(via2viaMinLenNew_[i][6],
+    via2viaMinLenNew[i][6]
+        = max(via2viaMinLenNew[i][6],
               init_via2viaMinLenNew_minimumcut1(lNum, upVia, upVia, false));
-    via2viaMinLenNew_[i][7]
-        = max(via2viaMinLenNew_[i][7],
+    via2viaMinLenNew[i][7]
+        = max(via2viaMinLenNew[i][7],
               init_via2viaMinLenNew_minimumcut1(lNum, upVia, upVia, true));
     i++;
   }
@@ -1083,41 +1072,40 @@ void FlexDR::init_via2viaMinLenNew()
   // check cut spacing
   i = 0;
   for (auto lNum = bottomLayerNum; lNum <= topLayerNum; lNum++) {
-    if (getDesign()->getTech()->getLayer(lNum)->getType()
-        != frLayerTypeEnum::ROUTING) {
+    if (getTech()->getLayer(lNum)->getType() != frLayerTypeEnum::ROUTING) {
       continue;
     }
     frViaDef* downVia = nullptr;
     frViaDef* upVia = nullptr;
-    if (getDesign()->getTech()->getBottomLayerNum() <= lNum - 1) {
-      downVia = getDesign()->getTech()->getLayer(lNum - 1)->getDefaultViaDef();
+    if (getTech()->getBottomLayerNum() <= lNum - 1) {
+      downVia = getTech()->getLayer(lNum - 1)->getDefaultViaDef();
     }
-    if (getDesign()->getTech()->getTopLayerNum() >= lNum + 1) {
-      upVia = getDesign()->getTech()->getLayer(lNum + 1)->getDefaultViaDef();
+    if (getTech()->getTopLayerNum() >= lNum + 1) {
+      upVia = getTech()->getLayer(lNum + 1)->getDefaultViaDef();
     }
-    via2viaMinLenNew_[i][0]
-        = max(via2viaMinLenNew_[i][0],
+    via2viaMinLenNew[i][0]
+        = max(via2viaMinLenNew[i][0],
               init_via2viaMinLenNew_cutSpc(lNum, downVia, downVia, false));
-    via2viaMinLenNew_[i][1]
-        = max(via2viaMinLenNew_[i][1],
+    via2viaMinLenNew[i][1]
+        = max(via2viaMinLenNew[i][1],
               init_via2viaMinLenNew_cutSpc(lNum, downVia, downVia, true));
-    via2viaMinLenNew_[i][2]
-        = max(via2viaMinLenNew_[i][2],
+    via2viaMinLenNew[i][2]
+        = max(via2viaMinLenNew[i][2],
               init_via2viaMinLenNew_cutSpc(lNum, downVia, upVia, false));
-    via2viaMinLenNew_[i][3]
-        = max(via2viaMinLenNew_[i][3],
+    via2viaMinLenNew[i][3]
+        = max(via2viaMinLenNew[i][3],
               init_via2viaMinLenNew_cutSpc(lNum, downVia, upVia, true));
-    via2viaMinLenNew_[i][4]
-        = max(via2viaMinLenNew_[i][4],
+    via2viaMinLenNew[i][4]
+        = max(via2viaMinLenNew[i][4],
               init_via2viaMinLenNew_cutSpc(lNum, upVia, downVia, false));
-    via2viaMinLenNew_[i][5]
-        = max(via2viaMinLenNew_[i][5],
+    via2viaMinLenNew[i][5]
+        = max(via2viaMinLenNew[i][5],
               init_via2viaMinLenNew_cutSpc(lNum, upVia, downVia, true));
-    via2viaMinLenNew_[i][6]
-        = max(via2viaMinLenNew_[i][6],
+    via2viaMinLenNew[i][6]
+        = max(via2viaMinLenNew[i][6],
               init_via2viaMinLenNew_cutSpc(lNum, upVia, upVia, false));
-    via2viaMinLenNew_[i][7]
-        = max(via2viaMinLenNew_[i][7],
+    via2viaMinLenNew[i][7]
+        = max(via2viaMinLenNew[i][7],
               init_via2viaMinLenNew_cutSpc(lNum, upVia, upVia, true));
     i++;
   }
@@ -1125,16 +1113,15 @@ void FlexDR::init_via2viaMinLenNew()
 
 void FlexDR::init_halfViaEncArea()
 {
-  auto bottomLayerNum = getDesign()->getTech()->getBottomLayerNum();
-  auto topLayerNum = getDesign()->getTech()->getTopLayerNum();
+  auto bottomLayerNum = getTech()->getBottomLayerNum();
+  auto topLayerNum = getTech()->getTopLayerNum();
+  auto& halfViaEncArea = via_data_.halfViaEncArea;
   for (int i = bottomLayerNum; i <= topLayerNum; i++) {
-    if (getDesign()->getTech()->getLayer(i)->getType()
-        != frLayerTypeEnum::ROUTING) {
+    if (getTech()->getLayer(i)->getType() != frLayerTypeEnum::ROUTING) {
       continue;
     }
     if (i + 1 <= topLayerNum
-        && getDesign()->getTech()->getLayer(i + 1)->getType()
-               == frLayerTypeEnum::CUT) {
+        && getTech()->getLayer(i + 1)->getType() == frLayerTypeEnum::CUT) {
       auto viaDef = getTech()->getLayer(i + 1)->getDefaultViaDef();
       frVia via(viaDef);
       frBox layer1Box;
@@ -1143,9 +1130,9 @@ void FlexDR::init_halfViaEncArea()
       via.getLayer2BBox(layer2Box);
       auto layer1HalfArea = layer1Box.width() * layer1Box.length() / 2;
       auto layer2HalfArea = layer2Box.width() * layer2Box.length() / 2;
-      halfViaEncArea_.push_back(make_pair(layer1HalfArea, layer2HalfArea));
+      halfViaEncArea.push_back(make_pair(layer1HalfArea, layer2HalfArea));
     } else {
-      halfViaEncArea_.push_back(make_pair(0, 0));
+      halfViaEncArea.push_back(make_pair(0, 0));
     }
   }
 }
@@ -1162,7 +1149,7 @@ frCoord FlexDR::init_via2turnMinLen_minSpc(frLayerNum lNum,
 
   // check min len in lNum assuming pre dir routing
   bool isCurrDirX = !isCurrDirY;
-  frCoord defaultWidth = getDesign()->getTech()->getLayer(lNum)->getWidth();
+  frCoord defaultWidth = getTech()->getLayer(lNum)->getWidth();
 
   frVia via1(viaDef);
   frBox viaBox1;
@@ -1180,7 +1167,7 @@ frCoord FlexDR::init_via2turnMinLen_minSpc(frLayerNum lNum,
 
   frCoord reqDist = 0;
   if (isVia1Fat) {
-    auto con = getDesign()->getTech()->getLayer(lNum)->getMinSpacing();
+    auto con = getTech()->getLayer(lNum)->getMinSpacing();
     if (con) {
       if (con->typeId() == frConstraintTypeEnum::frcSpacingConstraint) {
         reqDist = static_cast<frSpacingConstraint*>(con)->getMinSpacing();
@@ -1219,7 +1206,7 @@ frCoord FlexDR::init_via2turnMinLen_minStp(frLayerNum lNum,
 
   // check min len in lNum assuming pre dir routing
   bool isCurrDirX = !isCurrDirY;
-  frCoord defaultWidth = getDesign()->getTech()->getLayer(lNum)->getWidth();
+  frCoord defaultWidth = getTech()->getLayer(lNum)->getWidth();
 
   frVia via1(viaDef);
   frBox viaBox1;
@@ -1234,7 +1221,7 @@ frCoord FlexDR::init_via2turnMinLen_minStp(frLayerNum lNum,
 
   frCoord reqDist = 0;
   if (isVia1Fat) {
-    auto con = getDesign()->getTech()->getLayer(lNum)->getMinStepConstraint();
+    auto con = getTech()->getLayer(lNum)->getMinStepConstraint();
     if (con
         && con->hasMaxEdges()) {  // currently only consider maxedge violation
       reqDist = con->getMinStepLength();
@@ -1253,68 +1240,64 @@ frCoord FlexDR::init_via2turnMinLen_minStp(frLayerNum lNum,
 
 void FlexDR::init_via2turnMinLen()
 {
-  auto bottomLayerNum = getDesign()->getTech()->getBottomLayerNum();
-  auto topLayerNum = getDesign()->getTech()->getTopLayerNum();
+  auto bottomLayerNum = getTech()->getBottomLayerNum();
+  auto topLayerNum = getTech()->getTopLayerNum();
+  auto& via2turnMinLen = via_data_.via2turnMinLen;
   for (auto lNum = bottomLayerNum; lNum <= topLayerNum; lNum++) {
-    if (getDesign()->getTech()->getLayer(lNum)->getType()
-        != frLayerTypeEnum::ROUTING) {
+    if (getTech()->getLayer(lNum)->getType() != frLayerTypeEnum::ROUTING) {
       continue;
     }
     vector<frCoord> via2turnMinLenTmp(4, 0);
-    via2turnMinLen_.push_back(via2turnMinLenTmp);
+    via2turnMinLen.push_back(via2turnMinLenTmp);
   }
   // check prl
   int i = 0;
   for (auto lNum = bottomLayerNum; lNum <= topLayerNum; lNum++) {
-    if (getDesign()->getTech()->getLayer(lNum)->getType()
-        != frLayerTypeEnum::ROUTING) {
+    if (getTech()->getLayer(lNum)->getType() != frLayerTypeEnum::ROUTING) {
       continue;
     }
     frViaDef* downVia = nullptr;
     frViaDef* upVia = nullptr;
-    if (getDesign()->getTech()->getBottomLayerNum() <= lNum - 1) {
-      downVia = getDesign()->getTech()->getLayer(lNum - 1)->getDefaultViaDef();
+    if (getTech()->getBottomLayerNum() <= lNum - 1) {
+      downVia = getTech()->getLayer(lNum - 1)->getDefaultViaDef();
     }
-    if (getDesign()->getTech()->getTopLayerNum() >= lNum + 1) {
-      upVia = getDesign()->getTech()->getLayer(lNum + 1)->getDefaultViaDef();
+    if (getTech()->getTopLayerNum() >= lNum + 1) {
+      upVia = getTech()->getLayer(lNum + 1)->getDefaultViaDef();
     }
-    via2turnMinLen_[i][0]
-        = max(via2turnMinLen_[i][0],
-              init_via2turnMinLen_minSpc(lNum, downVia, false));
-    via2turnMinLen_[i][1] = max(
-        via2turnMinLen_[i][1], init_via2turnMinLen_minSpc(lNum, downVia, true));
-    via2turnMinLen_[i][2] = max(via2turnMinLen_[i][2],
-                                init_via2turnMinLen_minSpc(lNum, upVia, false));
-    via2turnMinLen_[i][3] = max(via2turnMinLen_[i][3],
-                                init_via2turnMinLen_minSpc(lNum, upVia, true));
+    via2turnMinLen[i][0] = max(
+        via2turnMinLen[i][0], init_via2turnMinLen_minSpc(lNum, downVia, false));
+    via2turnMinLen[i][1] = max(via2turnMinLen[i][1],
+                               init_via2turnMinLen_minSpc(lNum, downVia, true));
+    via2turnMinLen[i][2] = max(via2turnMinLen[i][2],
+                               init_via2turnMinLen_minSpc(lNum, upVia, false));
+    via2turnMinLen[i][3] = max(via2turnMinLen[i][3],
+                               init_via2turnMinLen_minSpc(lNum, upVia, true));
     i++;
   }
 
   // check minstep
   i = 0;
   for (auto lNum = bottomLayerNum; lNum <= topLayerNum; lNum++) {
-    if (getDesign()->getTech()->getLayer(lNum)->getType()
-        != frLayerTypeEnum::ROUTING) {
+    if (getTech()->getLayer(lNum)->getType() != frLayerTypeEnum::ROUTING) {
       continue;
     }
     frViaDef* downVia = nullptr;
     frViaDef* upVia = nullptr;
-    if (getDesign()->getTech()->getBottomLayerNum() <= lNum - 1) {
-      downVia = getDesign()->getTech()->getLayer(lNum - 1)->getDefaultViaDef();
+    if (getTech()->getBottomLayerNum() <= lNum - 1) {
+      downVia = getTech()->getLayer(lNum - 1)->getDefaultViaDef();
     }
-    if (getDesign()->getTech()->getTopLayerNum() >= lNum + 1) {
-      upVia = getDesign()->getTech()->getLayer(lNum + 1)->getDefaultViaDef();
+    if (getTech()->getTopLayerNum() >= lNum + 1) {
+      upVia = getTech()->getLayer(lNum + 1)->getDefaultViaDef();
     }
     vector<frCoord> via2turnMinLenTmp(4, 0);
-    via2turnMinLen_[i][0]
-        = max(via2turnMinLen_[i][0],
-              init_via2turnMinLen_minStp(lNum, downVia, false));
-    via2turnMinLen_[i][1] = max(
-        via2turnMinLen_[i][1], init_via2turnMinLen_minStp(lNum, downVia, true));
-    via2turnMinLen_[i][2] = max(via2turnMinLen_[i][2],
-                                init_via2turnMinLen_minStp(lNum, upVia, false));
-    via2turnMinLen_[i][3] = max(via2turnMinLen_[i][3],
-                                init_via2turnMinLen_minStp(lNum, upVia, true));
+    via2turnMinLen[i][0] = max(
+        via2turnMinLen[i][0], init_via2turnMinLen_minStp(lNum, downVia, false));
+    via2turnMinLen[i][1] = max(via2turnMinLen[i][1],
+                               init_via2turnMinLen_minStp(lNum, downVia, true));
+    via2turnMinLen[i][2] = max(via2turnMinLen[i][2],
+                               init_via2turnMinLen_minStp(lNum, upVia, false));
+    via2turnMinLen[i][3] = max(via2turnMinLen[i][3],
+                               init_via2turnMinLen_minStp(lNum, upVia, true));
     i++;
   }
 }
@@ -1369,146 +1352,6 @@ FlexDR::initDR_mergeBoundaryPin(int startX,
     }
   }
   return bp;
-}
-
-void FlexDR::initDR(int size, bool enableDRC)
-{
-  frTime t;
-
-  if (VERBOSE > 0) {
-    cout << endl << "start initial detail routing ..." << endl;
-  }
-  frBox dieBox;
-  getDesign()->getTopBlock()->getBoundaryBBox(dieBox);
-
-  auto gCellPatterns = getDesign()->getTopBlock()->getGCellPatterns();
-  auto& xgp = gCellPatterns.at(0);
-  auto& ygp = gCellPatterns.at(1);
-
-  int cnt = 0;
-  int tot = (((int) xgp.getCount() - 1) / size + 1)
-            * (((int) ygp.getCount() - 1) / size + 1);
-  int prev_perc = 0;
-  bool isExceed = false;
-
-  vector<unique_ptr<FlexDRWorker>> uworkers;
-  int batchStepX, batchStepY;
-
-  getBatchInfo(batchStepX, batchStepY);
-
-  vector<vector<vector<unique_ptr<FlexDRWorker>>>> workers(batchStepX
-                                                           * batchStepY);
-
-  int xIdx = 0, yIdx = 0;
-  // sequential init
-  for (int i = 0; i < (int) xgp.getCount(); i += size) {
-    for (int j = 0; j < (int) ygp.getCount(); j += size) {
-      auto worker = make_unique<FlexDRWorker>(this, logger_);
-      frBox routeBox1;
-      getDesign()->getTopBlock()->getGCellBox(frPoint(i, j), routeBox1);
-      frBox routeBox2;
-      getDesign()->getTopBlock()->getGCellBox(
-          frPoint(min((int) xgp.getCount() - 1, i + size - 1),
-                  min((int) ygp.getCount(), j + size - 1)),
-          routeBox2);
-      // frBox routeBox;
-      frBox routeBox(routeBox1.left(),
-                     routeBox1.bottom(),
-                     routeBox2.right(),
-                     routeBox2.top());
-      frBox extBox;
-      routeBox.bloat(MTSAFEDIST, extBox);
-      frBox drcBox;
-      routeBox.bloat(DRCSAFEDIST, drcBox);
-      worker->setRouteBox(routeBox);
-      worker->setExtBox(extBox);
-      worker->setDrcBox(drcBox);
-
-      auto bp = initDR_mergeBoundaryPin(i, j, size, routeBox);
-      worker->setDRIter(0, bp);
-      // set boundary pin
-      worker->setFollowGuide(false);
-      // worker->setFollowGuide(true);
-      worker->setCost(ROUTESHAPECOST, 0);
-      // int workerIdx = xIdx * batchSizeY + yIdx;
-      int batchIdx = (xIdx % batchStepX) * batchStepY + yIdx % batchStepY;
-      // workers[batchIdx][workerIdx] = worker;
-      if (workers[batchIdx].empty()
-          || (int) workers[batchIdx].back().size() >= BATCHSIZE) {
-        workers[batchIdx].push_back(vector<unique_ptr<FlexDRWorker>>());
-      }
-      workers[batchIdx].back().push_back(std::move(worker));
-
-      yIdx++;
-    }
-    yIdx = 0;
-    xIdx++;
-  }
-
-  omp_set_num_threads(MAX_THREADS);
-
-  // parallel execution
-  for (auto& workerBatch : workers) {
-    for (auto& workersInBatch : workerBatch) {
-// multi thread
-#pragma omp parallel for schedule(dynamic)
-      for (int i = 0; i < (int) workersInBatch.size(); i++) {
-        workersInBatch[i]->main();
-#pragma omp critical
-        {
-          cnt++;
-          if (VERBOSE > 0) {
-            if (cnt * 1.0 / tot >= prev_perc / 100.0 + 0.1 && prev_perc < 90) {
-              if (prev_perc == 0 && t.isExceed(0)) {
-                isExceed = true;
-              }
-              prev_perc += 10;
-              // if (true) {
-              if (isExceed) {
-                cout << "    completing " << prev_perc << "% with "
-                     << getDesign()->getTopBlock()->getNumMarkers()
-                     << " violations" << endl;
-                cout << "    " << t << endl << flush;
-              }
-            }
-          }
-        }
-      }
-      // single thread
-      for (int i = 0; i < (int) workersInBatch.size(); i++) {
-        workersInBatch[i]->end();
-      }
-      workersInBatch.clear();
-    }
-  }
-  checkConnectivity();
-
-  if (VERBOSE > 0) {
-    if (cnt * 1.0 / tot >= prev_perc / 100.0 + 0.1 && prev_perc >= 90) {
-      if (prev_perc == 0 && t.isExceed(0)) {
-        isExceed = true;
-      }
-      prev_perc += 10;
-      // if (true) {
-      if (isExceed) {
-        cout << "    completing " << prev_perc << "% with "
-             << getDesign()->getTopBlock()->getNumMarkers() << " violations"
-             << endl;
-        cout << "    " << t << endl << flush;
-      }
-    }
-  }
-
-  removeGCell2BoundaryPin();
-  numViols_.push_back(getDesign()->getTopBlock()->getNumMarkers());
-  if (VERBOSE > 0) {
-    logger_->info(DRT,
-                  196,
-                  "  number of violations = {}",
-                  getDesign()->getTopBlock()->getNumMarkers());
-    t.print(logger_);
-    cout << flush;
-  }
 }
 
 void FlexDR::getBatchInfo(int& batchStepX, int& batchStepY)
@@ -1573,7 +1416,7 @@ void FlexDR::searchRepair(int iter,
     graphics_->startIter(iter);
   }
   frBox dieBox;
-  getDesign()->getTopBlock()->getBoundaryBBox(dieBox);
+  getDesign()->getTopBlock()->getDieBox(dieBox);
   auto gCellPatterns = getDesign()->getTopBlock()->getGCellPatterns();
   auto& xgp = gCellPatterns.at(0);
   auto& ygp = gCellPatterns.at(1);
@@ -1595,7 +1438,7 @@ void FlexDR::searchRepair(int iter,
   int xIdx = 0, yIdx = 0;
   for (int i = offset; i < (int) xgp.getCount(); i += clipSize) {
     for (int j = offset; j < (int) ygp.getCount(); j += clipSize) {
-      auto worker = make_unique<FlexDRWorker>(this, logger_);
+      auto worker = make_unique<FlexDRWorker>(&via_data_, design_, logger_);
       frBox routeBox1;
       getDesign()->getTopBlock()->getGCellBox(frPoint(i, j), routeBox1);
       frBox routeBox2;
@@ -1654,7 +1497,7 @@ void FlexDR::searchRepair(int iter,
 // multi thread
 #pragma omp parallel for schedule(dynamic)
         for (int i = 0; i < (int) workersInBatch.size(); i++) {
-          workersInBatch[i]->main();
+          workersInBatch[i]->main(getDesign());
 #pragma omp critical
           {
             cnt++;
@@ -1681,7 +1524,7 @@ void FlexDR::searchRepair(int iter,
         ProfileTask profile("DR:end_batch");
         // single thread
         for (int i = 0; i < (int) workersInBatch.size(); i++) {
-          workersInBatch[i]->end();
+          workersInBatch[i]->end(getDesign());
         }
         workersInBatch.clear();
       }
@@ -1752,10 +1595,9 @@ void FlexDR::end(bool writeMetrics)
   }
 
   if (writeMetrics) {
-    logger_->metric(DRT,
-                    "wire length::total",
+    logger_->metric("drt::wire length::total",
                     totWlen / getDesign()->getTopBlock()->getDBUPerUU());
-    logger_->metric(DRT, "vias::total", totSCut + totMCut);
+    logger_->metric("drt::vias::total", totSCut + totMCut);
   }
 
   if (VERBOSE > 0) {
@@ -1858,7 +1700,7 @@ void FlexDR::end(bool writeMetrics)
 
 void FlexDR::reportDRC()
 {
-  double dbu = design_->getTech()->getDBUPerUU();
+  double dbu = getTech()->getDBUPerUU();
 
   if (DRC_RPT_FILE == string("")) {
     if (VERBOSE > 0) {
@@ -1867,75 +1709,159 @@ void FlexDR::reportDRC()
     }
     return;
   }
-  // cout << DRC_RPT_FILE << "\n";
+
   ofstream drcRpt(DRC_RPT_FILE.c_str());
   if (drcRpt.is_open()) {
     for (auto& marker : getDesign()->getTopBlock()->getMarkers()) {
       auto con = marker->getConstraint();
       drcRpt << "  violation type: ";
       if (con) {
-        if (con->typeId() == frConstraintTypeEnum::frcShortConstraint) {
-          if (getTech()->getLayer(marker->getLayerNum())->getType()
-              == frLayerTypeEnum::ROUTING) {
-            drcRpt << "Short";
-          } else if (getTech()->getLayer(marker->getLayerNum())->getType()
-                     == frLayerTypeEnum::CUT) {
-            drcRpt << "CShort";
+        switch (con->typeId()) {
+          case frConstraintTypeEnum::frcShortConstraint: {
+            if (getTech()->getLayer(marker->getLayerNum())->getType()
+                == frLayerTypeEnum::ROUTING) {
+              drcRpt << "Short";
+            } else if (getTech()->getLayer(marker->getLayerNum())->getType()
+                       == frLayerTypeEnum::CUT) {
+              drcRpt << "CShort";
+            }
+            break;
           }
-        } else if (con->typeId()
-                   == frConstraintTypeEnum::frcMinWidthConstraint) {
-          drcRpt << "MinWid";
-        } else if (con->typeId()
-                   == frConstraintTypeEnum::frcSpacingConstraint) {
-          drcRpt << "MetSpc";
-        } else if (con->typeId()
-                   == frConstraintTypeEnum::frcSpacingEndOfLineConstraint) {
-          drcRpt << "EOLSpc";
-        } else if (con->typeId()
-                   == frConstraintTypeEnum::frcSpacingTablePrlConstraint) {
-          drcRpt << "MetSpc";
-        } else if (con->typeId()
-                   == frConstraintTypeEnum::frcCutSpacingConstraint) {
-          drcRpt << "CutSpc";
-        } else if (con->typeId()
-                   == frConstraintTypeEnum::frcMinStepConstraint) {
-          drcRpt << "MinStp";
-        } else if (con->typeId()
-                   == frConstraintTypeEnum::frcNonSufficientMetalConstraint) {
-          drcRpt << "NSMet";
-        } else if (con->typeId()
-                   == frConstraintTypeEnum::frcSpacingSamenetConstraint) {
-          drcRpt << "MetSpc";
-        } else if (con->typeId()
-                   == frConstraintTypeEnum::frcOffGridConstraint) {
-          drcRpt << "OffGrid";
-        } else if (con->typeId()
-                   == frConstraintTypeEnum::frcMinEnclosedAreaConstraint) {
-          drcRpt << "MinHole";
-        } else if (con->typeId() == frConstraintTypeEnum::frcAreaConstraint) {
-          drcRpt << "MinArea";
-        } else if (con->typeId()
-                   == frConstraintTypeEnum::frcLef58CornerSpacingConstraint) {
-          drcRpt << "CornerSpc";
-        } else if (con->typeId()
-                   == frConstraintTypeEnum::frcLef58CutSpacingConstraint) {
-          drcRpt << "CutSpc";
-        } else if (con->typeId()
-                   == frConstraintTypeEnum::frcLef58RectOnlyConstraint) {
-          drcRpt << "RectOnly";
-        } else if (con->typeId()
-                   == frConstraintTypeEnum::
-                       frcLef58RightWayOnGridOnlyConstraint) {
-          drcRpt << "RightWayOnGridOnly";
-        } else if (con->typeId()
-                   == frConstraintTypeEnum::frcLef58MinStepConstraint) {
-          drcRpt << "MinStp";
-        } else if (con->typeId()
-                   == frConstraintTypeEnum::
-                       frcSpacingTableInfluenceConstraint) {
-          drcRpt << "MetSpcInf";
-        } else {
-          drcRpt << "unknown";
+          case frConstraintTypeEnum::frcMinWidthConstraint:
+            drcRpt << "MinWid";
+            break;
+          case frConstraintTypeEnum::frcSpacingConstraint:
+            drcRpt << "MetSpc";
+            break;
+          case frConstraintTypeEnum::frcSpacingEndOfLineConstraint:
+            drcRpt << "EOLSpc";
+            break;
+          case frConstraintTypeEnum::frcSpacingTablePrlConstraint:
+            drcRpt << "MetSpc";
+            break;
+          case frConstraintTypeEnum::frcCutSpacingConstraint:
+            drcRpt << "CutSpc";
+            break;
+          case frConstraintTypeEnum::frcMinStepConstraint:
+            drcRpt << "MinStp";
+            break;
+          case frConstraintTypeEnum::frcNonSufficientMetalConstraint:
+            drcRpt << "NSMet";
+            break;
+          case frConstraintTypeEnum::frcSpacingSamenetConstraint:
+            drcRpt << "MetSpc";
+            break;
+          case frConstraintTypeEnum::frcOffGridConstraint:
+            drcRpt << "OffGrid";
+            break;
+          case frConstraintTypeEnum::frcMinEnclosedAreaConstraint:
+            drcRpt << "MinHole";
+            break;
+          case frConstraintTypeEnum::frcAreaConstraint:
+            drcRpt << "MinArea";
+            break;
+          case frConstraintTypeEnum::frcLef58CornerSpacingConstraint:
+            drcRpt << "CornerSpc";
+            break;
+          case frConstraintTypeEnum::frcLef58CutSpacingConstraint:
+            drcRpt << "CutSpc";
+            break;
+          case frConstraintTypeEnum::frcLef58RectOnlyConstraint:
+            drcRpt << "RectOnly";
+            break;
+          case frConstraintTypeEnum::frcLef58RightWayOnGridOnlyConstraint:
+            drcRpt << "RightWayOnGridOnly";
+            break;
+          case frConstraintTypeEnum::frcLef58MinStepConstraint:
+            drcRpt << "MinStp";
+            break;
+          case frConstraintTypeEnum::frcSpacingTableInfluenceConstraint:
+            drcRpt << "MetSpcInf";
+            break;
+          case frConstraintTypeEnum::frcSpacingEndOfLineParallelEdgeConstraint:
+            drcRpt << "SpacingEndOfLineParallelEdge";
+            break;
+          case frConstraintTypeEnum::frcSpacingTableConstraint:
+            drcRpt << "SpacingTable";
+            break;
+          case frConstraintTypeEnum::frcSpacingTableTwConstraint:
+            drcRpt << "SpacingTableTw";
+            break;
+          case frConstraintTypeEnum::frcLef58SpacingTableConstraint:
+            drcRpt << "Lef58SpacingTable";
+            break;
+          case frConstraintTypeEnum::frcLef58CutSpacingTableConstraint:
+            drcRpt << "Lef58CutSpacingTable";
+            break;
+          case frConstraintTypeEnum::frcLef58CutSpacingTablePrlConstraint:
+            drcRpt << "Lef58CutSpacingTablePrl";
+            break;
+          case frConstraintTypeEnum::frcLef58CutSpacingTableLayerConstraint:
+            drcRpt << "Lef58CutSpacingTableLayer";
+            break;
+          case frConstraintTypeEnum::frcLef58CutSpacingParallelWithinConstraint:
+            drcRpt << "Lef58CutSpacingParallelWithin";
+            break;
+          case frConstraintTypeEnum::frcLef58CutSpacingAdjacentCutsConstraint:
+            drcRpt << "Lef58CutSpacingAdjacentCuts";
+            break;
+          case frConstraintTypeEnum::frcLef58CutSpacingLayerConstraint:
+            drcRpt << "Lef58CutSpacingLayer";
+            break;
+          case frConstraintTypeEnum::frcMinimumcutConstraint:
+            drcRpt << "Minimumcut";
+            break;
+          case frConstraintTypeEnum::
+              frcLef58CornerSpacingConcaveCornerConstraint:
+            drcRpt << "Lef58CornerSpacingConcaveCorner";
+            break;
+          case frConstraintTypeEnum::
+              frcLef58CornerSpacingConvexCornerConstraint:
+            drcRpt << "Lef58CornerSpacingConvexCorner";
+            break;
+          case frConstraintTypeEnum::frcLef58CornerSpacingSpacingConstraint:
+            drcRpt << "Lef58CornerSpacingSpacing";
+            break;
+          case frConstraintTypeEnum::frcLef58CornerSpacingSpacing1DConstraint:
+            drcRpt << "Lef58CornerSpacingSpacing1D";
+            break;
+          case frConstraintTypeEnum::frcLef58CornerSpacingSpacing2DConstraint:
+            drcRpt << "Lef58CornerSpacingSpacing2D";
+            break;
+          case frConstraintTypeEnum::frcLef58SpacingEndOfLineConstraint:
+            drcRpt << "Lef58SpacingEndOfLine";
+            break;
+          case frConstraintTypeEnum::frcLef58SpacingEndOfLineWithinConstraint:
+            drcRpt << "Lef58SpacingEndOfLineWithin";
+            break;
+          case frConstraintTypeEnum::
+              frcLef58SpacingEndOfLineWithinEndToEndConstraint:
+            drcRpt << "Lef58SpacingEndOfLineWithinEndToEnd";
+            break;
+          case frConstraintTypeEnum::
+              frcLef58SpacingEndOfLineWithinEncloseCutConstraint:
+            drcRpt << "Lef58SpacingEndOfLineWithinEncloseCut";
+            break;
+          case frConstraintTypeEnum::
+              frcLef58SpacingEndOfLineWithinParallelEdgeConstraint:
+            drcRpt << "Lef58SpacingEndOfLineWithinParallelEdge";
+            break;
+          case frConstraintTypeEnum::
+              frcLef58SpacingEndOfLineWithinMaxMinLengthConstraint:
+            drcRpt << "Lef58SpacingEndOfLineWithinMaxMinLength";
+            break;
+          case frConstraintTypeEnum::frcLef58CutClassConstraint:
+            drcRpt << "Lef58CutClass";
+            break;
+          case frConstraintTypeEnum::frcRecheckConstraint:
+            drcRpt << "Recheck";
+            break;
+          case frConstraintTypeEnum::frcLef58EolExtensionConstraint:
+            drcRpt << "Lef58EolExtension";
+            break;
+          case frConstraintTypeEnum::frcLef58EolKeepOutConstraint:
+            drcRpt << "Lef58EolKeepOut";
+            break;
         }
       } else {
         drcRpt << "nullptr";

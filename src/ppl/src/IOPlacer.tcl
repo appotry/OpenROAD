@@ -2,7 +2,7 @@
 ##
 ## BSD 3-Clause License
 ##
-## Copyright (c) 2019, University of California, San Diego.
+## Copyright (c) 2019, The Regents of the University of California
 ## All rights reserved.
 ##
 ## Redistribution and use in source and binary forms, with or without
@@ -38,11 +38,12 @@ sta::define_cmd_args "define_pin_shape_pattern" {[-layer layer] \
                                                  [-x_step x_step] \
                                                  [-y_step y_step] \
                                                  [-region region] \
-                                                 [-size size]}
+                                                 [-size size] \
+                                                 [-pin_keepout dist]}
 
 proc define_pin_shape_pattern { args } {
   sta::parse_key_args "define_pin_shape_pattern" args \
-  keys {-layer -x_step -y_step -region -size}
+  keys {-layer -x_step -y_step -region -size -pin_keepout}
 
   if [info exists keys(-layer)] {
     set layer_name $keys(-layer)
@@ -95,7 +96,18 @@ proc define_pin_shape_pattern { args } {
     utl::error PPL 57 "-size is required."
   }
 
-  ppl::create_pin_shape_pattern $layer_idx $x_step $y_step $llx $lly $urx $ury $width $height
+  if [info exists keys(-pin_keepout)] {
+    sta::check_positive_float "pin_keepout" $keys(-pin_keepout)
+    set keepout [ord::microns_to_dbu $keys(-pin_keepout)]
+  } else {
+    set max_dim $width
+    if {$max_dim < $height} {
+      set max_dim $height
+    }
+    set keepout [[[ord::get_db_tech] findLayer $keys(-layer)] getSpacing $max_dim]
+  }
+
+  ppl::create_pin_shape_pattern $layer_idx $x_step $y_step $llx $lly $urx $ury $width $height $keepout
 }
 
 sta::define_cmd_args "set_io_pin_constraint" {[-direction direction] \
@@ -133,7 +145,7 @@ proc set_io_pin_constraint { args } {
     }
 
     if {[info exists keys(-direction)] && [info exists keys(-pin_names)]} {
-      utl::error PPL 16 "Both -direction and -pin_names constraints not allowed.."
+      utl::error PPL 16 "Both -direction and -pin_names constraints not allowed."
     }
 
     if [info exists keys(-direction)] {
@@ -160,14 +172,20 @@ proc set_io_pin_constraint { args } {
       set urx [ord::microns_to_dbu $urx]
       set ury [ord::microns_to_dbu $ury]
     } else {
-      utl::error PPL 59 "box at top layer must have 4 values (llx lly urx ury)."
+      utl::error PPL 59 "Box at top layer must have 4 values (llx lly urx ury)."
     }
 
     if [info exists keys(-pin_names)] {
       set names $keys(-pin_names)
       ppl::add_pins_to_top_layer "set_io_pin_constraint" $names $llx $lly $urx $ury
     }
+  } else {
+    utl::warn PPL 73 "Constraint with region $region has an invalid edge."
   }
+}
+
+proc clear_io_pin_constraints {} {
+  ppl::clear_constraints
 }
 
 sta::define_cmd_args "place_pin" {[-pin_name pin_name]\
@@ -234,6 +252,7 @@ sta::define_cmd_args "place_pins" {[-hor_layers h_layers]\
                        	          [-random]\
                                   [-corner_avoidance distance]\
                                   [-min_distance min_dist]\
+                                  [-min_distance_in_tracks]\
                                   [-exclude region]\
                                   [-group_pins pin_list]
                                  }
@@ -242,17 +261,18 @@ proc place_pins { args } {
   set regions [ppl::parse_excludes_arg $args]
   set pin_groups [ppl::parse_group_pins_arg $args]
   sta::parse_key_args "place_pins" args \
-  keys {-hor_layers -ver_layers -random_seed -corner_avoidance -min_distance -exclude -group_pins} \
-  flags {-random}
+  keys {-hor_layers -ver_layers -random_seed -corner_avoidance \
+        -min_distance -exclude -group_pins} \
+  flags {-random -min_distance_in_tracks}
 
   set dbTech [ord::get_db_tech]
   if { $dbTech == "NULL" } {
-    utl::error PPL 31 "no technology found."
+    utl::error PPL 31 "No technology found."
   }
 
   set dbBlock [ord::get_db_block]
   if { $dbBlock == "NULL" } {
-    utl::error PPL 32 "no block found."
+    utl::error PPL 32 "No block found."
   }
 
   set db [ord::get_db]
@@ -300,14 +320,20 @@ proc place_pins { args } {
   }
 
   set min_dist 2
+  set dist_in_tracks [info exists flags(-min_distance_in_tracks)]
   if [info exists keys(-min_distance)] {
     set min_dist $keys(-min_distance)
-    ppl::set_min_distance [ord::microns_to_dbu $min_dist]
+    if {$dist_in_tracks} {
+      ppl::set_min_distance $min_dist
+    } else {
+      ppl::set_min_distance [ord::microns_to_dbu $min_dist]
+    }
   } else {
     utl::report "Using $min_dist tracks default min distance between IO pins."
     # setting min distance as 0u leads to the default min distance
     ppl::set_min_distance 0
   }
+  ppl::set_min_distance_in_tracks $dist_in_tracks
 
   set bterms_cnt [llength [$dbBlock getBTerms]]
 
@@ -387,7 +413,7 @@ proc place_pins { args } {
           utl::error PPL 25 "-exclude: $interval is an invalid region"
         }
       } else {
-        utl::error PPL 26 "-exclude: invalid syntax in $region. use (top|bottom|left|right):interval."
+        utl::error PPL 26 "-exclude: invalid syntax in $region. Use (top|bottom|left|right):interval."
       }
     }
   }
@@ -418,7 +444,7 @@ namespace eval ppl {
 proc parse_edge { cmd edge } {
   if {$edge != "top" && $edge != "bottom" && \
       $edge != "left" && $edge != "right"} {
-    utl::error PPL 27 "$cmd: $edge is an invalid edge. use top, bottom, left or right."
+    utl::error PPL 27 "$cmd: $edge is an invalid edge. Use top, bottom, left or right."
   }
   return [ppl::get_edge $edge]
 }
@@ -497,12 +523,12 @@ proc exclude_intervals { cmd intervals } {
 
 proc parse_layer_name { layer_name } {
   if { ![ord::db_has_tech] } {
-    utl::error PPL 50 "no technology has been read."
+    utl::error PPL 50 "No technology has been read."
   }
   set tech [ord::get_db_tech]
   set tech_layer [$tech findLayer $layer_name]
   if { $tech_layer == "NULL" } {
-    utl::error PPL 51 "layer $layer_name not found."
+    utl::error PPL 51 "Layer $layer_name not found."
   }
   set layer_idx [$tech_layer getRoutingLevel]
 
@@ -528,12 +554,7 @@ proc parse_pin_names {cmd names} {
   set dbBlock [ord::get_db_block]
   set pin_list {}
   foreach pin [get_ports $names] {
-    set db_bterm [$dbBlock findBTerm [get_property $pin name]]
-    if { $db_bterm != "NULL" } {
-      lappend pin_list $db_bterm
-    } else {
-      utl::warn PPL 44 "Pin $pin_name not found for command $cmd"
-    }
+    lappend pin_list [sta::sta_to_db_port $pin]
   }
 
   if {[llength $pin_list] == 0} {

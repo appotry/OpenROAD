@@ -130,6 +130,7 @@ class Ext
     bool diag = false;
     bool over_under = false;
     bool gen_def_patterns = false;
+    bool resPatterns = false;
   };
 
   bool bench_wires(const BenchWiresOptions& bwo);
@@ -179,6 +180,7 @@ class Ext
     int tiling = 0;
     bool skip_m1_caps = false;
     bool power_grid = false;
+    bool write_total_caps = false;
     const char* exclude_cells = nullptr;
     bool skip_power_stubs = false;
     const char* power_source_coords = nullptr;

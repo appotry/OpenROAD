@@ -6,7 +6,7 @@ read_lef sky130hs/sky130hs.tlef
 read_lef sky130hs/sky130hs_std_cell.lef
 read_liberty sky130hs/sky130hs_tt.lib
 
-read_def -order_wires gcd.def
+read_def gcd.def
 
 # Load via resistance info
 source sky130hs/sky130hs.rc
@@ -17,8 +17,6 @@ extract_parasitics -ext_model_file ext_pattern.rules \
 
 set spef_file [make_result_file gcd.spef] 
 write_spef $spef_file -nets $test_nets
-# remove rcx turd
-file delete gcd.totCap
 
 read_spef $spef_file
 

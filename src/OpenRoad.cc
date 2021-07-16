@@ -1,6 +1,6 @@
 /////////////////////////////////////////////////////////////////////////////
 //
-// Copyright (c) 2019, OpenROAD
+// Copyright (c) 2019, The Regents of the University of California
 // All rights reserved.
 //
 // BSD 3-Clause License
@@ -46,7 +46,6 @@
 #include "utl/Logger.h"
 
 #include "opendb/db.h"
-#include "opendb/wOrder.h"
 #include "opendb/lefin.h"
 #include "opendb/defin.h"
 #include "opendb/defout.h"
@@ -62,7 +61,7 @@
 #include "db_sta/dbNetwork.hh"
 
 #include "ord/InitOpenRoad.hh"
-#include "sst/flute.h"
+#include "stt/flute.h"
 
 #include "ifp//MakeInitFloorplan.hh"
 #include "ppl/MakeIoplacer.h"
@@ -71,16 +70,19 @@
 #include "dpl/MakeOpendp.h"
 #include "fin/MakeFinale.h"
 #include "mpl/MakeMacroPlacer.h"
+#include "mpl2/MakeMacroPlacer.h"
 #include "replace/MakeReplace.h"
-#include "grt/MakeFastRoute.h"
-#include "tritoncts/MakeTritoncts.h"
+#include "grt/MakeGlobalRouter.h"
+#include "cts/MakeTritoncts.h"
+#include "rmp/MakeRestructure.h"
 #include "tap/MakeTapcell.h"
 #include "rcx/MakeOpenRCX.h"
 #include "triton_route/MakeTritonRoute.h"
 #include "psm/MakePDNSim.hh"
 #include "ant/MakeAntennaChecker.hh"
-#include "PartitionMgr/src/MakePartitionMgr.h"
+#include "par/MakePartitionMgr.h"
 #include "pdn/MakePdnGen.hh"
+#include "pdr/MakePdrev.h"
 
 namespace sta {
 extern const char *openroad_swig_tcl_inits[];
@@ -126,7 +128,9 @@ OpenRoad::OpenRoad()
     opendp_(nullptr),
     finale_(nullptr),
     macro_placer_(nullptr),
-    fastRoute_(nullptr),
+    macro_placer2_(nullptr),
+    global_router_(nullptr),
+    restructure_(nullptr),
     tritonCts_(nullptr),
     tapcell_(nullptr),
     extractor_(nullptr),
@@ -148,10 +152,12 @@ OpenRoad::~OpenRoad()
   deleteIoplacer(ioPlacer_);
   deleteResizer(resizer_);
   deleteOpendp(opendp_);
-  deleteFastRoute(fastRoute_);
+  deleteGlobalRouter(global_router_);
+  deleteRestructure(restructure_);
   deleteTritonCts(tritonCts_);
   deleteTapcell(tapcell_);
   deleteMacroPlacer(macro_placer_);
+  deleteMacroPlacer2(macro_placer2_);
   deleteOpenRCX(extractor_);
   deleteTritonRoute(detailed_router_);
   deleteReplace(replace_);
@@ -208,10 +214,12 @@ OpenRoad::init(Tcl_Interp *tcl_interp)
   resizer_ = makeResizer();
   opendp_ = makeOpendp();
   finale_ = makeFinale();
-  fastRoute_ = makeFastRoute();
+  global_router_ = makeGlobalRouter();
+  restructure_ = makeRestructure();
   tritonCts_ = makeTritonCts();
   tapcell_ = makeTapcell();
   macro_placer_ = makeMacroPlacer();
+  macro_placer2_ = makeMacroPlacer2();
   extractor_ = makeOpenRCX();
   detailed_router_ = makeTritonRoute();
   replace_ = makeReplace();
@@ -237,20 +245,31 @@ OpenRoad::init(Tcl_Interp *tcl_interp)
   initReplace(this);
   initOpendp(this);
   initFinale(this);
-  initFastRoute(this);
+  initGlobalRouter(this);
   initTritonCts(this);
   initTapcell(this);
   initMacroPlacer(this);
+  initMacroPlacer2(this);
   initOpenRCX(this);
+  initRestructure(this);
   initTritonRoute(this);
   initPDNSim(this);
   initAntennaChecker(this);
   initPartitionMgr(this);
   initPdnGen(this);
+  initPdrev(this);
 
   // Import exported commands to global namespace.
   Tcl_Eval(tcl_interp, "sta::define_sta_cmds");
   Tcl_Eval(tcl_interp, "namespace import sta::*");
+
+  // Initialize tcl history
+  if (Tcl_Eval(tcl_interp, "history") == TCL_ERROR) {
+    // There appears to be a typo in the history.tcl file in some
+    // distributions, which is generating this error.
+    // remove error from tcl result.
+    Tcl_ResetResult(tcl_interp);
+  }
 }
 
 ////////////////////////////////////////////////////////////////
@@ -283,7 +302,6 @@ OpenRoad::readLef(const char *filename,
 
 void
 OpenRoad::readDef(const char *filename,
-		  bool order_wires,
 		  bool continue_on_errors,
       bool floorplan_init,
       bool incremental)
@@ -303,14 +321,6 @@ OpenRoad::readDef(const char *filename,
   dbChip* chip = def_reader.createChip(search_libs, filename);
   if (chip) {
     dbBlock* block = chip->getBlock();
-    if (order_wires) {
-      odb::orderWires(block,
-                      nullptr /* net_name_or_id*/,
-                      false /* force */,
-                      false /* verbose */,
-                      true /* quiet */);
-    }
-
     for (Observer* observer : observers_) {
       observer->postReadDef(block);
     }

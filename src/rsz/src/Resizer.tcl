@@ -1,6 +1,6 @@
 ############################################################################
 ##
-## Copyright (c) 2019, OpenROAD
+## Copyright (c) 2019, The Regents of the University of California
 ## All rights reserved.
 ##
 ## BSD 3-Clause License
@@ -45,7 +45,7 @@ proc set_layer_rc {args} {
     flags {}
 
   if { [info exists keys(-layer)] && [info exists keys(-via)] } {
-    utl::error "ORD" 10 "Use -layer or -via but not both."
+    utl::error "ORD" 101 "Use -layer or -via but not both."
   }
 
   set corners [sta::parse_corner_or_all keys]
@@ -54,15 +54,15 @@ proc set_layer_rc {args} {
     set layer_name $keys(-layer)
     set layer [$tech findLayer $layer_name]
     if { $layer == "NULL" } {
-      utl::error "ORD" 19 "layer $layer_name not found."
+      utl::error "ORD" 102 "layer $layer_name not found."
     }
 
     if { [$layer getRoutingLevel] == 0 } {
-      utl::error "ORD" 18 "$layer_name is not a routing layer."
+      utl::error "ORD" 103 "$layer_name is not a routing layer."
     }
 
     if { ![info exists keys(-capacitance)] && ![info exists keys(-resistance)] } {
-      utl::error "ORD" 12 "missing -capacitance or -resistance argument."
+      utl::error "ORD" 104 "missing -capacitance or -resistance argument."
     }
 
     set cap 0.0
@@ -95,11 +95,11 @@ proc set_layer_rc {args} {
     set layer_name $keys(-via)
     set layer [$tech findLayer $layer_name]
     if { $layer == "NULL" } {
-      utl::error "ORD" 21 "via $layer_name not found."
+      utl::error "ORD" 105 "via $layer_name not found."
     }
     
     if { [info exists keys(-capacitance)] } {
-      utl::warn "ORD" 22 "-capacitance not supported for vias."
+      utl::warn "ORD" 106 "-capacitance not supported for vias."
     }
     
     if { [info exists keys(-resistance)] } {
@@ -117,10 +117,10 @@ proc set_layer_rc {args} {
         rsz::set_layer_rc_cmd $layer $corner $res 0.0
       }
     } else {
-      utl::error "ORD" 17 "no -resistance specified for via."
+      utl::error "ORD" 108 "no -resistance specified for via."
     }
   } else {
-    utl::error "ORD" 9 "missing -layer or -via argument."
+    utl::error "ORD" 109 "missing -layer or -via argument."
   }
 }
 
@@ -289,38 +289,31 @@ sta::define_cmd_args "repair_design" {[-max_wire_length max_wire_length]\
 
 proc repair_design { args } {
   sta::parse_key_args "repair_design" args \
-    keys {-max_wire_length -buffer_cell -libraries -max_utilization} \
+    keys {-max_wire_length -max_utilization -max_slew_margin -max_cap_margin} \
     flags {}
   
-  if { [info exists keys(-buffer_cell)] } {
-    utl::warn RSZ 16 "-buffer_cell is deprecated."
-  }
-  if { [info exists keys(-libraries)] } {
-    utl::warn RSZ 13 "-libraries is deprecated."
-  }
   set max_wire_length [rsz::parse_max_wire_length keys]
-  
+  set max_slew_margin [rsz::parse_percent_margin_arg "-max_slew_margin" keys]
+  set max_cap_margin [rsz::parse_percent_margin_arg "-max_cap_margin" keys]
   rsz::set_max_utilization [rsz::parse_max_util keys]
   
   sta::check_argc_eq0 "repair_design" $args
   rsz::check_parasitics
   rsz::resizer_preamble
   set max_wire_length [rsz::check_max_wire_length $max_wire_length]
-  rsz::repair_design_cmd $max_wire_length
+  rsz::repair_design_cmd $max_wire_length $max_slew_margin $max_cap_margin
 }
 
 sta::define_cmd_args "repair_clock_nets" {[-max_wire_length max_wire_length]}
 
 proc repair_clock_nets { args } {
   sta::parse_key_args "repair_clock_nets" args \
-    keys {-max_wire_length -buffer_cell} \
+    keys {-max_wire_length} \
     flags {}
   
-  if { [info exists keys(-buffer_cell)] } {
-    utl::warn RSZ 18 "-buffer_cell is deprecated."
-  }
   set max_wire_length [rsz::parse_max_wire_length keys]
   
+
   sta::check_argc_eq0 "repair_clock_nets" $args
   rsz::check_parasitics
   rsz::resizer_preamble
@@ -401,7 +394,7 @@ proc repair_timing { args } {
     set hold 1
   }
   
-  set slack_margin [rsz::parse_slack_margin_arg keys]
+  set slack_margin [rsz::parse_time_margin_arg "-slack_margin" keys]
   set allow_setup_violations [info exists flags(-allow_setup_violations)]
   rsz::set_max_utilization [rsz::parse_max_util keys]
   
@@ -491,15 +484,27 @@ proc check_parasitics { } {
   }
 }
   
-proc parse_slack_margin_arg { keys_var } {
-  upvar 1 $keys_var keys
-  set slack_margin 0.0
-  if { [info exists keys(-slack_margin)] } {
-    set slack_margin $keys(-slack_margin)
-    sta::check_positive_float "-slack_margin" $slack_margin
-    set slack_margin [sta::time_ui_sta $slack_margin]
+proc parse_time_margin_arg { key keys_var } {
+  return [sta::time_ui_sta [parse_margin_arg $key $keys_var]]
+}
+
+proc parse_percent_margin_arg { key keys_var } {
+  set margin [parse_margin_arg $key $keys_var]
+  if { !($margin >= 0 && $margin < 100) } {
+    utl::warn RSZ 67 "$key must be  between 0 and 100 percent."
   }
-  return $slack_margin
+  return $margin
+}
+
+proc parse_margin_arg { key keys_var } {
+  upvar 2 $keys_var keys
+
+  set margin 0.0
+  if { [info exists keys($key)] } {
+    set margin $keys($key)
+    sta::check_positive_float $key $margin
+  }
+  return $margin
 }
   
 proc parse_max_util { keys_var } {
@@ -532,7 +537,7 @@ proc check_max_wire_length { max_wire_length } {
     set min_delay_max_wire_length [rsz::find_max_wire_length]
     if { $max_wire_length > 0 } {
       if { $max_wire_length < $min_delay_max_wire_length } {
-        utl::warn RSZ 17 "max wire length less than [format %.0fu [sta::distance_sta_ui $min_delay_max_wire_length]] increases wire delays."
+        utl::warn RSZ 65 "max wire length less than [format %.0fu [sta::distance_sta_ui $min_delay_max_wire_length]] increases wire delays."
       }
     } else {
       set max_wire_length $min_delay_max_wire_length
@@ -562,14 +567,12 @@ proc dblayer_wire_rc { layer } {
 proc set_dblayer_wire_rc { layer res cap } {
   # Zero the edge cap and just use the user given value
   $layer setEdgeCapacitance 0
-  # Convert wire capacitance/wire_length to capacitance/area.
   set wire_width [ord::dbu_to_microns [$layer getWidth]]
-  # Convert to pF/um.
+  # Convert wire capacitance/wire_length to capacitance/area (pF/um)
   set cap_per_square [expr $cap * 1e+6 / $wire_width]
   $layer setCapacitance $cap_per_square
   
-  # Convert resistance/wire_length to resistance/square.
-  # convert to ohms/square
+  # Convert resistance/wire_length (ohms/micron) to ohms/square
   set res_per_square [expr $wire_width * 1e-6 * $res]
   $layer setResistance $res_per_square
 }

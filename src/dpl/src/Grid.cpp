@@ -4,7 +4,7 @@
 //          (respective Ph.D. advisors: Seokhyeong Kang, Andrew B. Kahng)
 // Rewrite by James Cherry, Parallax Software, Inc.
 //
-// Copyright (c) 2019, OpenROAD
+// Copyright (c) 2019, The Regents of the University of California
 // Copyright (c) 2018, SangGi Do and Mingyu Woo
 // All rights reserved.
 //
@@ -42,6 +42,7 @@
 #include <cmath>
 #include <limits>
 
+#include "opendb/dbTransform.h"
 #include "utl/Logger.h"
 
 namespace dpl {
@@ -52,6 +53,7 @@ using std::min;
 using utl::DPL;
 
 using odb::dbBox;
+using odb::dbTransform;
 
 void
 Opendp::initGrid()
@@ -80,15 +82,11 @@ Opendp::initGrid()
     db_row->getOrigin(orig_x, orig_y);
 
     int x_start = (orig_x - core_.xMin()) / site_width_;
-    int y_start = (orig_y - core_.yMin()) / row_height_;
-
     int x_end = x_start + db_row->getSiteCount();
-    int y_end = y_start + 1;
+    int y = (orig_y - core_.yMin()) / row_height_;
 
     for (int x = x_start; x < x_end; x++) {
-      for (int y = y_start; y < y_end; y++) {
-        grid_[y][x].is_valid = true;
-      }
+      grid_[y][x].is_valid = true;
     }
   }
 }
@@ -123,16 +121,23 @@ Opendp::visitCellPixels(Cell &cell,
                         bool padded,
                         const std::function <void (Pixel *pixel)>& visitor) const
 {
-  dbMaster *master = cell.db_inst_->getMaster();
+  dbInst *inst = cell.db_inst_;
+  dbMaster *master = inst->getMaster();
   auto obstructions = master->getObstructions();
   bool have_obstructions = false;
   for (dbBox *obs : obstructions) {
     if (obs->getTechLayer()->getType() == odb::dbTechLayerType::Value::OVERLAP) {
       have_obstructions = true;
-      int x_start = gridX(obs->xMin() - core_.xMin());
-      int x_end = gridEndX(obs->xMax() - core_.xMin());
-      int y_start = gridY(obs->yMin() - core_.yMin());
-      int y_end = gridEndY(obs->yMax() - core_.yMin());
+
+      Rect rect;
+      obs->getBox(rect);
+      dbTransform transform;
+      inst->getTransform(transform);
+      transform.apply(rect);
+      int x_start = gridX(rect.xMin() - core_.xMin());
+      int x_end = gridEndX(rect.xMax() - core_.xMin());
+      int y_start = gridY(rect.yMin() - core_.yMin());
+      int y_end = gridEndY(rect.yMax() - core_.yMin());
       for (int x = x_start; x < x_end; x++) {
         for (int y = y_start; y < y_end; y++) {
           Pixel *pixel = gridPixel(x, y);

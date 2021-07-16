@@ -2,7 +2,7 @@
 //
 // BSD 3-Clause License
 //
-// Copyright (c) 2019, University of California, San Diego.
+// Copyright (c) 2019, The Regents of the University of California
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
@@ -135,7 +135,7 @@ void HungarianMatching::findAssignmentForGroups()
 void HungarianMatching::createMatrixForGroups()
 {
   for (std::vector<int>& io_group : netlist_.getIOGroups()) {
-    group_size_ = std::max((int)io_group.size(), group_size_);
+    group_size_ = std::max(static_cast<int>(io_group.size()), group_size_);
   }
 
   if (group_size_ > 0) {
@@ -170,7 +170,6 @@ void HungarianMatching::createMatrixForGroups()
       hungarian_matrix_[slot_index].resize(num_pin_groups_);
       for (std::vector<int>& io_group : netlist_.getIOGroups()) {
         int group_hpwl = 0;
-        int pin_count = 0;
         for (int io_idx : io_group) {
           int pin_hpwl = netlist_.computeIONetHPWL(io_idx, newPos);
           if (pin_hpwl == hungarian_fail) {

@@ -51,10 +51,10 @@ odb::dbDatabase *getDb();
 
 namespace ant {
 
-void
-check_antennas(char* report_filename, bool simple_report)
+int
+check_antennas(char* report_filename, bool report_violating_nets)
 {
-  getAntennaChecker()->check_antennas(report_filename, simple_report);
+  return getAntennaChecker()->check_antennas(report_filename, report_violating_nets);
 }
 
 void
@@ -71,6 +71,8 @@ load_antenna_rules()
   getAntennaChecker()->load_antenna_rules();
 }
 
+// check if an input net is violated, return 1 if the net is violated
+//   - -net_name: set the net name for checking
 bool
 check_net_violation(char* net_name)
 { 
@@ -83,6 +85,7 @@ check_net_violation(char* net_name)
     return false;
 }
 
+// Prints the longest wire in the design
 void
 find_max_wire_length()
 {

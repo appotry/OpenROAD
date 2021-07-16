@@ -1,6 +1,6 @@
 /////////////////////////////////////////////////////////////////////////////
 //
-// Copyright (c) 2019, OpenROAD
+// Copyright (c) 2019, The Regents of the University of California
 // All rights reserved.
 //
 // BSD 3-Clause License
@@ -53,6 +53,7 @@ namespace ifp {
 
 using std::string;
 using std::abs;
+using std::ceil;
 using std::round;
 
 using sta::Vector;
@@ -140,6 +141,7 @@ protected:
   void autoPlacePins(dbTechLayer *pin_layer,
 		     Rect &core);
   int metersToMfgGrid(double dist) const;
+  int metersToDbu(double dist) const;
   double dbuToMeters(int dist) const;
   void updateVoltageDomain(dbSite *site,
 			   int core_lx,
@@ -266,6 +268,12 @@ InitFloorplan::initFloorplan(double die_lx,
   }
 }
 
+static int
+divCeil(int dividend, int divisor)
+{
+  return ceil(static_cast<double>(dividend) / divisor);
+}
+
 void
 InitFloorplan::initFloorplan(double die_lx,
 			     double die_ly,
@@ -295,11 +303,11 @@ InitFloorplan::initFloorplan(double die_lx,
 
       uint site_dx = site->getWidth();
       uint site_dy = site->getHeight();
-      // floor core lower left corner to multiple of site dx/dy.
-      int clx = (metersToMfgGrid(core_lx) / site_dx) * site_dx;
-      int cly = (metersToMfgGrid(core_ly) / site_dy) * site_dy;
-      int cux = metersToMfgGrid(core_ux);
-      int cuy = metersToMfgGrid(core_uy);
+      // core lower left corner to multiple of site dx/dy.
+      int clx = divCeil(metersToDbu(core_lx), site_dx) * site_dx;
+      int cly = divCeil(metersToDbu(core_ly), site_dy) * site_dy;
+      int cux = metersToDbu(core_ux);
+      int cuy = metersToDbu(core_uy);
       makeRows(site, clx, cly, cux, cuy);
       updateVoltageDomain(site, clx, cly, cux, cuy);
     }
@@ -317,8 +325,8 @@ InitFloorplan::updateVoltageDomain(dbSite *site,
 				   int core_ux,
 				   int core_uy)
 {
-  // this is hardcoded for now as a margin between voltage domains, the default margin is: fp_gap_default * site_dy
-  static constexpr int fp_gap_default = 6;
+  //The unit for power_domain_y_space is the site height. The real space is power_domain_y_space * site_dy
+  static constexpr int power_domain_y_space = 6;
   uint site_dy = site->getHeight();
   uint site_dx = site->getWidth();
   
@@ -327,7 +335,7 @@ InitFloorplan::updateVoltageDomain(dbSite *site,
     if (group->getType() == dbGroup::VOLTAGE_DOMAIN) {
       dbRegion *domain_region = dbRegion::create(block_, group->getName());
 
-      string domain_name = string(group->getName());
+      string domain_name = group->getName();
       Rect domain_rect = group->getBox();
       int domain_xMin = domain_rect.xMin();
       int domain_yMin = domain_rect.yMin();
@@ -336,8 +344,8 @@ InitFloorplan::updateVoltageDomain(dbSite *site,
       dbBox::create(domain_region, domain_xMin, domain_yMin, domain_xMax, domain_yMax);
 
       dbSet<dbRow> rows = block_->getRows();
-      int total_row_count = 0;
-      for (dbRow *row: rows) total_row_count++;
+      int total_row_count = rows.size();
+
       
       dbSet<dbRow>::iterator row_itr = rows.begin();
       for (int row_processed = 0;
@@ -352,25 +360,25 @@ InitFloorplan::updateVoltageDomain(dbSite *site,
         int row_yMin = row_bbox.yMin();
         int row_yMax = row_bbox.yMax();
 
-        string row_name = row->getName();
         // check if the rows overlapped with the area of a defined voltage domains + margin
-        if (row_yMax + fp_gap_default * site_dy <= domain_yMin || 
-            row_yMin >= domain_yMax + fp_gap_default * site_dy) {
+        if (row_yMax + power_domain_y_space * site_dy <= domain_yMin || 
+            row_yMin >= domain_yMax + power_domain_y_space * site_dy) {
           row_itr++;
-          continue;
         } else {
+          
+          string row_name = row->getName();
           dbOrientType orient = row->getOrient();
           row_itr = dbRow::destroy(row_itr);
           
           // lcr stands for left core row
-          int lcr_xMax = domain_xMin - fp_gap_default * site_dy;
+          int lcr_xMax = domain_xMin - power_domain_y_space * site_dy;
           // in case there is at least one valid site width on the left, create left core rows 
           if (lcr_xMax > core_lx + site_dx)
           {
             string lcr_name = row_name + "_1";
 	        // warning message since tap cells might not be inserted
             if (lcr_xMax < core_lx + 10 * site_dx) {
-              logger_->warn(IFP, 11, "left core row: {} has less than 10 sites", lcr_name);   
+              logger_->warn(IFP, 26, "left core row: {} has less than 10 sites", lcr_name);   
             } 
             int lcr_sites = (lcr_xMax - core_lx) / site_dx;
             dbRow::create(block_, lcr_name.c_str(), site, core_lx, row_yMin, orient, 
@@ -378,13 +386,16 @@ InitFloorplan::updateVoltageDomain(dbSite *site,
           }
           
           // rcr stands for right core row
-          int rcr_xMin = domain_xMax + fp_gap_default * site_dy;
+          // rcr_dx_site_number is the max number of site_dx that is less than power_domain_y_space * site_dy. This helps align the rcr_xMin on the multiple of site_dx. 
+          int rcr_dx_site_number = (power_domain_y_space * site_dy) / site_dx; 
+          int rcr_xMin = domain_xMax + rcr_dx_site_number * site_dx; 
+
           // in case there is at least one valid site width on the right, create right core rows 
           if (rcr_xMin + site_dx < core_ux)
           {  
             string rcr_name = row_name + "_2";
             if (rcr_xMin + 10 * site_dx > core_ux) {
-              logger_->warn(IFP, 12, "right core row: {} has less than 10 sites", rcr_name); 
+              logger_->warn(IFP, 27, "right core row: {} has less than 10 sites", rcr_name); 
             }   
             int rcr_sites = (core_ux - rcr_xMin) / site_dx;
             dbRow::create(block_, rcr_name.c_str(), site, rcr_xMin, row_yMin, orient, 
@@ -421,8 +432,8 @@ InitFloorplan::makeRows(dbSite *site,
   int y = core_ly;
   for (int row = 0; row < rows_y; row++) {
     dbOrientType orient = (row % 2 == 0)
-      ? dbOrientType::MX  // FS
-      : dbOrientType::R0; // N
+      ? dbOrientType::R0        // N
+      : dbOrientType::MX;       // FS
     string row_name = stdstrPrint("ROW_%d", row);
     dbRow::create(block_, row_name.c_str(), site, core_lx, y, orient,
 		  dbRowDir::HORIZONTAL, rows_x, site_dx);
@@ -551,6 +562,14 @@ InitFloorplan::dbuToMeters(int dist) const
   dbTech *tech = db_->getTech();
   int dbu = tech->getDbUnitsPerMicron();
   return dist / (dbu * 1e+6);
+}
+
+int
+InitFloorplan::metersToDbu(double dist) const
+{
+  dbTech *tech = db_->getTech();
+  int dbu = tech->getDbUnitsPerMicron();
+  return dist * 1e+6 * dbu;
 }
 
 } // namespace

@@ -118,6 +118,13 @@ getResizer()
   return openroad->getResizer();
 }
 
+rmp::Restructure *
+getRestructure()
+{
+  OpenRoad *openroad = getOpenRoad();
+  return openroad->getRestructure();
+}
+
 cts::TritonCTS *
 getTritonCts()
 {
@@ -130,6 +137,13 @@ getMacroPlacer()
 {
   OpenRoad *openroad = getOpenRoad();
   return openroad->getMacroPlacer();
+}
+
+mpl::MacroPlacer2 *
+getMacroPlacer2()
+{
+  OpenRoad *openroad = getOpenRoad();
+  return openroad->getMacroPlacer2();
 }
 
 gpl::Replace*
@@ -161,10 +175,10 @@ getPDNSim()
 }
 
 grt::GlobalRouter*
-getFastRoute()
+getGlobalRouter()
 {
   OpenRoad *openroad = getOpenRoad();
-  return openroad->getFastRoute();
+  return openroad->getGlobalRouter();
 }
 
 ppl::IOPlacer*
@@ -260,10 +274,13 @@ read_lef_cmd(const char *filename,
 }
 
 void
-read_def_cmd(const char *filename, bool order_wires, bool continue_on_errors, bool floorplan_init, bool incremental)
+read_def_cmd(const char *filename,
+             bool continue_on_errors,
+             bool floorplan_init,
+             bool incremental)
 {
   OpenRoad *ord = getOpenRoad();
-  ord->readDef(filename, order_wires, continue_on_errors, floorplan_init, incremental);
+  ord->readDef(filename, continue_on_errors, floorplan_init, incremental);
 }
 
 void

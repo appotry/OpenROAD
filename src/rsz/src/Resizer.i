@@ -1,6 +1,6 @@
 /////////////////////////////////////////////////////////////////////////////
 //
-// Copyright (c) 2019, OpenROAD
+// Copyright (c) 2019, The Regents of the University of California
 // All rights reserved.
 //
 // BSD 3-Clause License
@@ -340,7 +340,7 @@ resize_driver_to_target_slew(const Pin *drvr_pin)
 {
   ensureLinked();
   Resizer *resizer = getResizer();
-  resizer->resizeToTargetSlew(drvr_pin);
+  resizer->resizeToTargetSlew(drvr_pin, false);
 }
 
 double
@@ -386,15 +386,17 @@ repair_tie_fanout_cmd(LibertyPort *tie_port,
 }
 
 void
-repair_design_cmd(float max_length)
+repair_design_cmd(double max_length,
+                  double max_slew_margin,
+                  double max_cap_margin)
 {
   ensureLinked();
   Resizer *resizer = getResizer();
-  resizer->repairDesign(max_length);
+  resizer->repairDesign(max_length, max_slew_margin, max_cap_margin);
 }
 
 void
-repair_clk_nets_cmd(float max_length)
+repair_clk_nets_cmd(double max_length)
 {
   ensureLinked();
   Resizer *resizer = getResizer();
@@ -411,11 +413,13 @@ repair_clk_inverters_cmd()
 
 void
 repair_net_cmd(Net *net,
-               float max_length)
+               double max_length,
+                  double max_slew_margin,
+                  double max_cap_margin)
 {
   ensureLinked();
   Resizer *resizer = getResizer();
-  resizer->repairNet(net, max_length); 
+  resizer->repairNet(net, max_length, max_slew_margin, max_cap_margin); 
 }
 
 void
@@ -508,6 +512,15 @@ resize_net_slack(Net *net)
 ////////////////////////////////////////////////////////////////
 
 float
+buffer_self_delay(LibertyCell *buffer_cell,
+                  const RiseFall *rf)
+{
+  ensureLinked();
+  Resizer *resizer = getResizer();
+  return resizer->bufferSelfDelay(buffer_cell, rf);
+}
+
+float
 buffer_wire_delay(LibertyCell *buffer_cell,
                   float wire_length) // meters
 {
@@ -591,10 +604,10 @@ utilization()
 }
 
 void
-highlight_steiner_tree(const Net *net)
+highlight_steiner_tree(const Pin *drvr_pin)
 {
   Resizer *resizer = getResizer();
-  resizer->highlightSteiner(net);
+  resizer->highlightSteiner(drvr_pin);
 }
 
 PinSet

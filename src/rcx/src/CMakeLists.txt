@@ -1,7 +1,7 @@
 ################################################################################
 ## BSD 3-Clause License
 ##
-## Copyright (c) 2020, OpenRoad Project UCSD
+## Copyright (c) 2020, The Regents of the University of California
 ## All rights reserved.
 ##
 ## Redistribution and use in source and binary forms, with or without
@@ -64,6 +64,7 @@ target_sources(rcx
     netRC.cpp
     powerConn.cpp
     MakeOpenRCX.cpp
+    extmeasure_res.cpp
 )
 
 target_include_directories(rcx
@@ -77,4 +78,9 @@ target_link_libraries(rcx
     utl
   PRIVATE
     OpenSTA
+)
+
+messages(
+  TARGET rcx
+  OUTPUT_DIR ..
 )

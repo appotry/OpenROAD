@@ -5,6 +5,7 @@
 OpenROAD is an integrated chip physical design tool that takes a
 design from synthesized Verilog to routed layout.  
 
+
 An outline of steps used to build a chip using OpenROAD are shown below.
 
 * Initialize floorplan - define the chip size and cell rows
@@ -123,6 +124,16 @@ test/regression <tool>
 # run <tool> tool tests
 src/<tool>/test/regression
 
+```
+
+The flow tests check results such as worst slack against reference values.
+Use `report_flow_metrics [test]...` to see the all of the metrics.
+Use `save_flow_metrics [test]...` to add margins to the metrics and save them to <test>.metrics_limits.
+
+```
+> report_flow_metrics gcd_nangate45
+                       insts    area util slack_min slack_max  tns_max clk_skew max_slew max_cap max_fanout DPL ANT drv
+gcd_nangate45            368     564  8.8     0.112    -0.015     -0.1    0.004        0       0          0   0   0   0
 ```
 
 #### Run
@@ -296,6 +307,7 @@ place_pins [-hor_layers h_layers]
            [-group_pins pins]
            [-corner_avoidance length]
            [-min_distance distance]
+           [-min_distance_in_tracks]
 ```
 - ``-hor_layers`` (mandatory). Specify the layers to create the metal shapes 
 of pins placed in horizontal tracks. Can be a single layer or a list of layer names.
@@ -308,11 +320,13 @@ where pins cannot be placed. Can be used multiple times.
 random.
 - ``-group_pins``. Specify a list of pins to be placed together on the die boundary.
 - ``-corner_avoidance distance``. Specify the distance (in micron) from each corner to avoid placing pins.
-- ``-min_distance distance``. Specify the minimum distance (in micron) between pins in the die boundary.
+- ``-min_distance distance``. Specify the minimum distance between pins in the die boundary.
+It can be in microns (default) or in number of tracks between each pin.
+- ``-min_distance_in_tracks``. Flag that allows set the min distance in number of tracks instead of microns.
 
 The `exclude` option syntax is `-exclude edge:interval`. The `edge` values are
 (top|bottom|left|right). The `interval` can be the whole edge, with the `*` value,
-or a range of values. Example: `place_pins -hor_layers 2 -ver_layers 3 -exclude top:* -exclude right:15-60.5 -exclude left:*-50`.
+or a range of values. Example: `place_pins -hor_layers metal2 -ver_layers metal3 -exclude top:* -exclude right:15-60.5 -exclude left:*-50`.
 In the example, three intervals were excluded: the whole top edge, the right edge from 15 microns to 60.5 microns, and the
 left edge from the beginning to the 50 microns.
 
@@ -330,11 +344,12 @@ The `-location` defines the center of the pin.
 The `-pin_size` option defines the width and height of the pin.
 
 ```
-define_pin_shape_pattern {[-layer layer]
-                          [-x_step x_step]
-                          [-y_step y_step]
-                          [-region {llx lly urx ury}]
-                          [-size {width height}]
+define_pin_shape_pattern [-layer layer]
+                         [-x_step x_step]
+                         [-y_step y_step]
+                         [-region {llx lly urx ury}]
+                         [-size {width height}]
+                         [-pin_keepout dist]
 ```
 
 The `define_pin_shape_pattern` command defines a pin placement grid at the specified layer.
@@ -344,6 +359,7 @@ The `-region` option defines the {llx, lly, urx, ury} region of the placement gr
 The `-x_step` and `-y_step` options define the distance between each valid position on the grid.
 The `-size` option defines the width and height of the pins assigned to this grid. The center of the
 pins are placed on the grid positions. Pins may have half of their shapes outside the defined region.
+The `-pin_keepout` option defines the boundary (microns) around existing routing obstructions the pins should avoid, defaults to the `layer` minimum spacing.
 
 ```
 set_io_pin_constraint -direction direction -pin_names names -region edge:interval
@@ -351,9 +367,19 @@ set_io_pin_constraint -direction direction -pin_names names -region edge:interva
 
 The `set_io_pin_constraint` command sets region constraints for pins according the direction or the pin name.
 This command can be called multiple times with different constraints. Only one condition should be used for each
-command call. The `-direction` argument is the pin direction defined in DEF file (input, output, inout, and feedthru).
+command call. The `-direction` argument is the pin direction (input, output, inout, or feedthru).
 The `-pin_names` argument is a list of names. The `-region` syntax is the same as the `-exclude` syntax.
 To restrict pins to the positions defined with `define_pin_shape_pattern`, use `-region up:{llx lly urx ury}` or `-region up:*`.
+
+```
+clear_io_pin_constraints
+```
+
+The `clear_io_pin_constraints` command clear all the previous defined constraints and pin shape pattern for top layer placement.
+
+##### Chip level connections
+
+At the top level of the chip, special padcells are use to connect signals to the external package. Additional commands are provided to [specify the placement of padcells, bondpads and bumps](src/ICeWall/doc/TCL_Interface.md)
 
 #### Tapcell
 
@@ -592,14 +618,20 @@ driver and the output port. If  The default behavior is
 
 ```
 repair_design [-max_wire_length max_length]
+              [-max_slew_margin slew_margin]
+              [-max_cap_margin cap_margin]
               [-max_utilization util]
 ```
 
 The `repair_design` command inserts buffers on nets to repair max slew, max
 capacitance, max fanout violations, and on long wires to reduce RC
 delay in the wire. It also resizes gates to normalize slews. 
-The resistance/capacitance values in `set_wire_rc` are used to find the
-wire delays. Use `-max_wire_length` to specify the maximum length of wires.
+Use `estimate_parasitics -placement` before `repair_design` to estimate
+parasitics considered during repair. Placement based parasitics cannot
+accurately predict routed parasitics, so a margin can be used to "over-repair"
+the design to compensate. Use `-max_slew_margin` to add a margin to the slews,
+and `-max_cap_margin` to add a margin to the capacitances,
+Use `-max_wire_length` to specify the maximum length of wires.
 The maximum wire length defaults to a value that minimizes the wire delay for the wire
 resistance/capacitance values specified by `set_wire_rc`.
 
@@ -650,13 +682,10 @@ report_floating_nets [-verbose]
 The `report_floating_nets` command reports nets with only one pin connection.
 Use the `-verbose` flag to see the net names.
 
-A typical resizer command file is shown below.
+A typical resizer command file (after a design and liberty libraries
+have been read) is shown below.
 
 ```
-# resizer/test/gcd_resize.tcl
-read_liberty Nangate_typ.lib
-read_lef Nangate.lef
-read_def gcd_placed.def
 read_sdc gcd.sdc
 
 set_wire_rc -layer metal2
@@ -716,11 +745,7 @@ be optionally controlled by parameters specified to configure_cts_characterizati
 Use set_wire_rc command to set clock routing layer.
 
 ```
-read_lef "mylef.lef"
-read_liberty "myliberty.lib"
-read_def "mydef.def"
-read_verilog "myverilog.v"
-read_sdc "mysdc.sdc"
+read_sdc "design.sdc"
 set_wire_rc -clock -layer metal5
 
 configure_cts_characterization [-max_slew <max_slew>] \
@@ -777,15 +802,6 @@ Another command available from TritonCTS is ``report_cts``. It is used to extrac
 The following tcl snippet shows how to call ``report_cts``.
 
 ```
-read_lef "mylef.lef"
-read_liberty "myliberty.lib"
-read_def "mydef.def"
-read_verilog "myverilog.v"
-read_sdc "mysdc.sdc"
-
-set_wire_rc -clock -layer metal5
-report_checks
-
 clock_tree_synthesis -root_buf "BUF_X4" \
                      -buf_list "BUF_X4" \
                      -wire_unit 20 
@@ -802,17 +818,17 @@ Global router options and commands are described below.
 ```
 global_route [-guide_file out_file] \
              [-verbose verbose] \
-             [-overflow_iterations iterations] \
+             [-congestion_iterations iterations] \
              [-grid_origin {x y}] \
-             [-allow_overflow]
+             [-allow_congestion]
 
 ```
 Options description:
 - **guide_file**: Set the output guides file name (e.g.: -guide_file route.guide")
 - **verbose**: Set verbose of report. 0 for less verbose, 1 for medium verbose, 2 for full verbose (e.g.: -verbose *1*)
-- **overflow_iterations**: Set the number of iterations to remove the overflow of the routing (e.g.: -overflow_iterations *50*)
+- **congestion_iterations**: Set the number of iterations to remove the overflow of the routing (e.g.: -congestion_iterations *50*)
 - **grid_origin**: Set the origin of the routing grid (e.g.: -grid_origin {1 1})
-- **allow_overflow**: Allow global routing results with overflow
+- **allow_congestion**: Allow global routing results with congestion
 
 ```
 set_routing_layers [-signal min-max] \
@@ -847,26 +863,17 @@ You can call it multiple times for different layers.
 Example: `set_global_routing_layer_pitch Metal6 1.34`.
 
 ```
-set_clock_routing [-clock_pdrev_fanout fanout] \
-                  [-clock_topology_priority priority]
+set_routing_alpha [-net net_name] alpha
 ```
-The `set_clock_routing` command sets specific configurations for clock nets.
-Options description:
-- **clock_pdrev_fanout**: Set the minimum fanout to use PDRev for the routing topology construction of the clock nets (e.g.: -clock_pdrev_fanout 5)
-- **clock_topology_priority**: Set the PDRev routing topology construction priority for clock nets.
-See `set_pdrev_topology_priority` command description for more details about PDRev and topology priority (e.g.: -topology_priority 0.6)
-
-```
-set_pdrev_topology_priority netName alpha
-```
-FastRoute has an alternative tool for the routing topology construction, called PDRev. You can define the topology construction
-priority of PDRev between wire length and skew, using the `alpha` parameter.
-The `set_pdrev_topology_priority` command sets the PDRev routing topology construction priority for specific nets.
-Alpha is a positive float between 0.0 and 1.0, where alpha close to 0.0 generates topologies with shorter wire length,
-and alpha close to 1.0 generates topologies with lower skew. For more information about PDRev, check the paper in
-`src/FastRoute/src/pdrev/papers/PDRev.pdf`
+By default the global router uses steiner trees to construct route guides. A steiner tree minimizes the total wire length.
+Prim/Dijkstra is an alternative net topology algorithm that supports a trade-off between total wire length and maximum path depth from
+the net driver to its loads.
+The `set_routing_alpha` command enables the Prim/Dijkstra algorithm and sets the alpha parameter used to trade-off wire length and path depth.
+Alpha is between 0.0 and 1.0. When alpha is 0.0 the net topology minimizes total wire length (i.e. capacitance).
+When alpha is 1.0 it minimizes longest path between the driver and loads (i.e., maximum resistance).
+Typical values are 0.4-0.8. For more information about PDRev, check the paper in `src/FastRoute/src/pdrev/papers/PDRev.pdf`
 You can call it multiple times for different nets.
-Example: `set_pdrev_topology_priority clk 0.3` sets an alpha value of 0.3 for net *clk*.
+Example: `set_routing_alpha -net clk 0.3` sets the alpha value of 0.3 for net *clk*.
 
 ```
 set_global_routing_region_adjustment {lower_left_x lower_left_y upper_right_x upper_right_y}
@@ -878,10 +885,25 @@ Example: `set_global_routing_region_adjustment {1.5 2 20 30.5}
                                                -layer Metal4 -adjustment 0.7`
 
 ```
-repair_antennas diodeCellName/diodePinName
+set_global_routing_random [-seed seed] \
+                          [-capacities_perturbation_percentage percent] \
+                          [-perturbation_amount value]
+```
+The `set_global_routing_random` command enables random global routing results. The random global routing shuffles the order
+of the nets and randomly subtracts or add the capacities of a random set of edges.
+The `-seed` option sets the random seed and is required to enable random mode. The `-capacities_perturbation_percentage` option
+sets the percentage of edges to perturb the capacities. By default, the edge capacities are perturbed by sum or subtract 1 from the original capacity.
+The `-perturbation_amount` option sets the perturbation value of the edge capacities. This option will only have effect when `-capacities_perturbation_percentage`
+is used.
+The random seed must be different from 0 to enable random global routing.
+Example: `set_global_routing_random -seed 42 -capacities_perturbation_percentage 50 -perturbation_amount 2`
+
+```
+repair_antennas diodeCellName/diodePinName [-iterations iterations]
 ```
 The repair_antenna command evaluates the global routing results looking for antenna violations, and repairs the violations
-by inserting diodes. The input for this command is the diode cell and pin names.
+by inserting diodes. The input for this command is the diode cell and pin names and the number of iterations. By default,
+the command runs only one iteration to repair antennas.
 It uses the  `antennachecker` tool to identify the antenna violations and return the exact number of diodes necessary to
 fix the antenna violation.
 Example: `repair_antenna sky130_fd_sc_hs__diode_2/DIODE`
@@ -939,3 +961,13 @@ Options description:
   the voltage value is obtained from operating conditions in the liberty.
 
 ###### Note: See the file [Vsrc_aes.loc file](https://github.com/The-OpenROAD-Project/PDNSim/blob/master/test/aes/Vsrc.loc) for an example with a description specified [here](https://github.com/The-OpenROAD-Project/PDNSim/blob/master/doc/Vsrc_description.md).
+
+#### TCL functions
+
+Get the die and core areas as a list in microns: "llx lly urx ury"
+
+```
+ord::get_die_area
+ord::get_core_area
+```
+

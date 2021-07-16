@@ -16,21 +16,17 @@ proc genFiles { run_dir ispd_year design drv } {
 
     file mkdir $run_dir
     file mkdir $run_dir/$design
-    puts "Create param file for $design"
-    set    paramFile [open "$run_dir/$design/run.param" w]
-    puts  $paramFile "guide:$bench_dir/$design/$design.input.guide"
-    puts  $paramFile "outputguide:$design.output.guide.mod"
-    puts  $paramFile "outputMaze:$design.output.maze.log"
-    puts  $paramFile "outputDRC:$design.outputDRC.rpt"
-    puts  $paramFile "threads:$threads"
-    puts  $paramFile "verbose:$verbose"
-    close $paramFile
 
     puts "Create tcl script for $design"
     set    tclFile [open "$run_dir/$design/run.tcl" w]
+    puts  $tclFile "set_thread_count $threads"
     puts  $tclFile "read_lef $bench_dir/$design/$design.input.lef"
     puts  $tclFile "read_def $bench_dir/$design/$design.input.def"
-    puts  $tclFile "detailed_route -param $run_dir/$design/run.param"
+    puts  $tclFile "detailed_route -guide $bench_dir/$design/$design.input.guide \\"
+    puts  $tclFile "               -output_guide $design.output.guide.mod \\"
+    puts  $tclFile "               -output_maze $design.output.maze.log \\"
+    puts  $tclFile "               -output_drc $design.output.drc.rpt \\"
+    puts  $tclFile "               -verbose $verbose"
     puts  $tclFile "write_def $run_dir/$design/$design.output.def"
     puts  $tclFile "set drv_count \[detailed_route_num_drvs] "
     puts  $tclFile "if { \$drv_count > $drv } {"
@@ -77,8 +73,8 @@ set drvs_ispd18 { \
     0 \
     0 \
     0 \
-    10 \
-    1 \
+    5 \
+    3 \
     0 \
     0 \
     }
@@ -95,7 +91,7 @@ set design_list_ispd19 " \
     ispd19_test1 \
     "
 set drvs_ispd19 { \
-    26 \
+    28 \
     1 \
     0 \
     0 \
@@ -119,6 +115,10 @@ cd $run_dir
 set design_list [concat $design_list_ispd18 $design_list_ispd19]
 set status [catch { eval exec -ignorestderr parallel -j $parallel_jobs --halt never --joblog $run_dir/log ./{}/run.sh ::: $design_list >@stdout } ]
 foreach design $design_list {
+    set fileName "$run_dir/$design/run.log"
+    set f [open $fileName]
+    fcopy $f stdout
+    close $f
     exec tar czvf "${design}.tar.gz" "${design}"
 }
 puts "======================="

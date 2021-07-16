@@ -1,15 +1,15 @@
 # Copyright (c) 2019, Parallax Software, Inc.
-# 
+#
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
-# 
+#
 # This program is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU General Public License for more details.
-# 
+#
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
@@ -118,24 +118,26 @@ add_subdirectory(OpenDB)
 add_subdirectory(sta)
 add_subdirectory(dbSta)
 add_subdirectory(rsz)
-add_subdirectory(sst)
+add_subdirectory(stt)
 add_subdirectory(replace)
 add_subdirectory(dpl)
 add_subdirectory(fin)
 add_subdirectory(ppl)
-add_subdirectory(TritonCTS)
+add_subdirectory(rmp)
+add_subdirectory(cts)
 add_subdirectory(grt)
 add_subdirectory(tap)
 add_subdirectory(mpl)
+add_subdirectory(mpl2)
 add_subdirectory(rcx)
 add_subdirectory(psm)
-add_subdirectory(PartitionMgr)
+add_subdirectory(par)
 add_subdirectory(ant)
 add_subdirectory(gui)
 add_subdirectory(TritonRoute)
 add_subdirectory(utl)
-add_subdirectory(pdrev)
-add_subdirectory(pdngen)
+add_subdirectory(pdr)
+add_subdirectory(pdn)
 
 ################################################################
 
@@ -167,23 +169,26 @@ target_link_libraries(openroad
   fin
   rsz
   ppl
-  sst
+  stt
   dbSta
   OpenSTA
   opendb
   opendbtcl
   rcx
-  TritonCTS
+  rmp
+  cts
   grt
   tap
   gui
   TritonRoute
   mpl
+  mpl2
   psm
   ant
-  PartitionMgr
+  par
   utl
   pdn
+  pdr
   ${TCL_LIBRARY}
   ${CMAKE_THREAD_LIBS_INIT}
 )
@@ -240,6 +245,20 @@ if (Python3_FOUND AND BUILD_PYTHON)
 else()
   message(STATUS "Python3 disabled")
 endif()
+
+messages(
+  TARGET openroad
+  SOURCE_DIR .
+  OUTPUT_DIR ..
+  LOCAL
+)
+
+# ICeWall isn't a proper module with its own CMakeLists.txt so it
+# is handled here (just like the tcl encoding).
+messages(
+  TARGET openroad
+  OUTPUT_DIR ICeWall
+)
 
 # Ancient versions of glibc found on CentOS required librt.
 # OSX has an empty version of librt that causes a link error,
