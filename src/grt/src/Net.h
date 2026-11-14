@@ -1,66 +1,100 @@
-/////////////////////////////////////////////////////////////////////////////
-//
-// BSD 3-Clause License
-//
-// Copyright (c) 2019, University of California, San Diego.
-// All rights reserved.
-//
-// Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions are met:
-//
-// * Redistributions of source code must retain the above copyright notice, this
-//   list of conditions and the following disclaimer.
-//
-// * Redistributions in binary form must reproduce the above copyright notice,
-//   this list of conditions and the following disclaimer in the documentation
-//   and/or other materials provided with the distribution.
-//
-// * Neither the name of the copyright holder nor the names of its
-//   contributors may be used to endorse or promote products derived from
-//   this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
-// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-// POSSIBILITY OF SUCH DAMAGE.
-//
-///////////////////////////////////////////////////////////////////////////////
+// SPDX-License-Identifier: BSD-3-Clause
+// Copyright (c) 2019-2025, The OpenROAD Authors
 
 #pragma once
 
+#include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "Pin.h"
-#include "opendb/db.h"
+#include "grt/GRoute.h"
+#include "grt/RoutePt.h"
+#include "odb/db.h"
+#include "odb/dbTypes.h"
 
 namespace grt {
 
 class Net
 {
  public:
-  Net() = default;
-  Net(odb::dbNet* net);
-  odb::dbNet* getDbNet() const { return _net; }
-  const std::string getName() const;
+  Net(odb::dbNet* net, bool has_wires);
+  odb::dbNet* getDbNet() const { return net_; }
+  std::string getName() const;
   const char* getConstName() const;
   odb::dbSigType getSignalType() const;
   void addPin(Pin& pin);
-  std::vector<Pin>& getPins() { return _pins; }
-  int getNumPins() const { return _pins.size(); }
+  void deleteSegment(int seg_id, GRoute& routes);
+  std::vector<Pin>& getPins() { return pins_; }
+  int getNumPins() const { return pins_.size(); }
+  float getSlack() const { return slack_; }
+  void setSlack(float slack) { slack_ = slack; }
+  void setHasWires(bool in) { has_wires_ = in; }
+  void setSegmentParent(std::vector<SegmentIndex> segment_parent)
+  {
+    parent_segment_indices_ = std::move(segment_parent);
+  }
+  std::vector<SegmentIndex> getSegmentParent() const
+  {
+    return parent_segment_indices_;
+  }
+  std::vector<std::vector<SegmentIndex>> buildSegmentsGraph();
   bool isLocal();
   void destroyPins();
+  void destroyITermPin(odb::dbITerm* iterm);
+  void destroyBTermPin(odb::dbBTerm* bterm);
+  bool hasWires() const { return has_wires_; }
+  bool hasStackedVias(odb::dbTechLayer* max_routing_layer);
+  void saveLastPinPositions();
+  void clearLastPinPositions() { last_pin_positions_.clear(); }
+  const std::multiset<RoutePt>& getLastPinPositions()
+  {
+    return last_pin_positions_;
+  }
+  void setMergedNet(odb::dbNet* merged_net) { merged_net_ = merged_net; }
+  odb::dbNet* getMergedNet() const { return merged_net_; }
+  void setIsMergedNet(bool merged_net) { is_merged_net_ = merged_net; }
+  bool isMergedNet() const { return is_merged_net_; }
+  void setDirtyNet(bool is_dirty_net) { is_dirty_net_ = is_dirty_net; }
+  bool isDirtyNet() const { return is_dirty_net_; }
+  void setIsClockNet(bool is_clk) { is_clk_ = is_clk; }
+  bool isClockNet() const { return is_clk_; }
+  void setRestoreRouteFromGuides(bool restore_route_from_guides)
+  {
+    restore_route_from_guides_ = restore_route_from_guides;
+  }
+  bool restoreRouteFromGuides() const { return restore_route_from_guides_; }
+  void setAreSegmentsRestored(bool are_segments_restored)
+  {
+    are_segments_restored_ = are_segments_restored;
+  }
+  bool areSegmentsRestored() const { return are_segments_restored_; }
+  void setIsConnectedToPadOrMacro(bool is_connected)
+  {
+    is_connected_to_pad_or_macro_ = is_connected;
+  }
+  bool isConnectedToPadOrMacro() const { return is_connected_to_pad_or_macro_; }
+  void setIsResAware(bool is_res_aware) { is_res_aware_ = is_res_aware; }
+  bool isResAware() const { return is_res_aware_; }
 
  private:
-  odb::dbNet* _net;
-  std::vector<Pin> _pins;
+  int getNumBTermsAboveMaxLayer(odb::dbTechLayer* max_routing_layer);
+
+  odb::dbNet* net_;
+  std::vector<Pin> pins_;
+  float slack_;
+  bool has_wires_;
+  std::vector<SegmentIndex> parent_segment_indices_;
+  std::multiset<RoutePt> last_pin_positions_;
+  odb::dbNet* merged_net_;
+  bool is_merged_net_;
+  bool is_dirty_net_;
+  bool is_clk_;
+  bool restore_route_from_guides_;
+  bool are_segments_restored_;
+  bool is_connected_to_pad_or_macro_;
+  bool is_res_aware_;
 };
 
 }  // namespace grt

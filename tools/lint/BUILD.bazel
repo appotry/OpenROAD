@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2025, Precision Innovations Inc.
+
+load("@bazel_skylib//rules:native_binary.bzl", "native_binary")
+
+package(default_visibility = ["//visibility:public"])
+
+native_binary(
+    name = "clang_tidy",
+    src = "@llvm//tools:clang-tidy",
+    # The multicall llvm binary picks its tool from argv[0], so out must
+    # be exactly "clang-tidy"; any other name runs it as plain clang.
+    out = "clang-tidy",
+)

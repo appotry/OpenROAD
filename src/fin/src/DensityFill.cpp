@@ -1,43 +1,25 @@
-/////////////////////////////////////////////////////////////////////////////
-// BSD 3-Clause License
-//
-// Copyright (c) 2020, OpenRoad Project
-// All rights reserved.
-//
-// Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions are met:
-//
-// * Redistributions of source code must retain the above copyright notice, this
-//   list of conditions and the following disclaimer.
-//
-// * Redistributions in binary form must reproduce the above copyright notice,
-//   this list of conditions and the following disclaimer in the documentation
-//   and/or other materials provided with the distribution.
-//
-// * Neither the name of the copyright holder nor the names of its
-//   contributors may be used to endorse or promote products derived from
-//   this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
-// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-// POSSIBILITY OF SUCH DAMAGE.
-///////////////////////////////////////////////////////////////////////////////
+// SPDX-License-Identifier: BSD-3-Clause
+// Copyright (c) 2020-2025, The OpenROAD Authors
 
 #include "DensityFill.h"
 
 #include <algorithm>
-#include <boost/lexical_cast.hpp>
+#include <array>
+#include <iterator>
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
 
+#include "boost/lexical_cast.hpp"
+#include "boost/polygon/polygon.hpp"
 #include "graphics.h"
-#include "opendb/dbShape.h"
+#include "odb/db.h"
+#include "odb/dbShape.h"
+#include "odb/dbTypes.h"
+#include "odb/geom.h"
+#include "polygon.h"
+#include "utl/Logger.h"
 
 namespace fin {
 
@@ -45,7 +27,20 @@ using utl::FIN;
 
 namespace pt = boost::property_tree;
 
-using namespace odb;
+using odb::dbBlock;
+using odb::dbChip;
+using odb::dbDatabase;
+using odb::dbFill;
+using odb::dbInstShapeItr;
+using odb::dbShape;
+using odb::dbTech;
+using odb::dbTechLayer;
+using odb::dbTechLayerDir;
+using odb::dbTechVia;
+using odb::dbVia;
+using odb::dbWire;
+using odb::dbWireShapeItr;
+using odb::Rect;
 
 // The rules for OPC or non-OPC shapes on a layer from the JSON config
 struct DensityFillShapesConfig
@@ -101,9 +96,8 @@ DensityFill::DensityFill(dbDatabase* db, utl::Logger* logger, bool debug)
   }
 }
 
-DensityFill::~DensityFill()  // must be in the .cpp due to forward decl
-{
-}
+// must be in the .cpp due to forward decl
+DensityFill::~DensityFill() = default;
 
 // Converts the user's JSON configuration file in per layer
 // DensityFillLayerConfig objects.
@@ -133,14 +127,13 @@ void DensityFill::readAndExpandLayers(dbTech* tech, pt::ptree& tree)
       auto widths = non_opc.get_child("width");
       auto heights = non_opc.get_child("height");
 
-      std::transform(widths.begin(),
-                     widths.end(),
-                     heights.begin(),
-                     std::back_inserter(scfg.shapes),
-                     [dbu](auto& w, auto& h) {
-                       return std::make_pair(getValue(w.second) * dbu,
-                                             getValue(h.second) * dbu);
-                     });
+      std::ranges::transform(widths,
+                             heights,
+                             std::back_inserter(scfg.shapes),
+                             [dbu](auto& w, auto& h) {
+                               return std::make_pair(getValue(w.second) * dbu,
+                                                     getValue(h.second) * dbu);
+                             });
     }
 
     // OPC data, if any
@@ -161,14 +154,13 @@ void DensityFill::readAndExpandLayers(dbTech* tech, pt::ptree& tree)
       auto widths = opc.get_child("width");
       auto heights = opc.get_child("height");
 
-      std::transform(widths.begin(),
-                     widths.end(),
-                     heights.begin(),
-                     std::back_inserter(scfg.shapes),
-                     [dbu](auto& w, auto& h) {
-                       return std::make_pair(getValue(w.second) * dbu,
-                                             getValue(h.second) * dbu);
-                     });
+      std::ranges::transform(widths,
+                             heights,
+                             std::back_inserter(scfg.shapes),
+                             [dbu](auto& w, auto& h) {
+                               return std::make_pair(getValue(w.second) * dbu,
+                                                     getValue(h.second) * dbu);
+                             });
     }
 
     auto it = layer.find("names");
@@ -191,7 +183,7 @@ void DensityFill::readAndExpandLayers(dbTech* tech, pt::ptree& tree)
         logger_->error(
             FIN, 2, "Layer {} not found.", layer.get_child("name").data());
       }
-      layers_[tech_layer] = cfg;
+      layers_[tech_layer] = std::move(cfg);
     }
   }
 }
@@ -256,7 +248,7 @@ static void insertShape(const dbShape& shape,
 }
 
 // Build a polygon set out of all the non-fill shape on the given layer
-// including wires, special wires, and instances' pins & OBS
+// including wires, special wires, fill obstructions, and instances' pins & OBS
 static Polygon90Set orNonFills(dbBlock* block, dbTechLayer* layer)
 {
   Polygon90Set non_fill;  // The result
@@ -281,8 +273,7 @@ static Polygon90Set orNonFills(dbBlock* block, dbTechLayer* layer)
       for (auto sbox : swire->getWires()) {
         if (sbox->isVia()) {
           dbVia* via = sbox->getBlockVia();
-          Rect rect;
-          sbox->getBox(rect);
+          Rect rect = sbox->getBox();
           shape.setVia(via, rect);
           dbShape::getViaBoxes(shape, via_shapes);
           for (auto& via_shape : via_shapes) {
@@ -301,6 +292,15 @@ static Polygon90Set orNonFills(dbBlock* block, dbTechLayer* layer)
   for (auto inst : block->getInsts()) {
     for (insts.begin(inst, dbInstShapeItr::ALL); insts.next(shape);) {
       insertShape(shape, non_fill, layer);
+    }
+  }
+
+  // Get shapes from fill obstructions
+  for (auto obstruction : block->getObstructions()) {
+    auto* box = obstruction->getBBox();
+    if (obstruction->isFillObstruction() && box->getTechLayer() == layer) {
+      non_fill.insert(
+          makeRect(box->xMin(), box->yMin(), box->xMax(), box->yMax()));
     }
   }
 
@@ -367,8 +367,7 @@ static void fillPolygon(const Polygon90& area,
 
   auto iter = cfg.shapes.begin();
   while (iter != cfg.shapes.end()) {
-    auto [w, h] = *iter;
-    bool last_shape = ++iter == cfg.shapes.end();
+    auto [w, h] = *iter++;
     // Ensure the longer direction is in the preferred direction
     if ((is_horiz && w < h) || (!is_horiz && h < w)) {
       std::swap(w, h);
@@ -424,7 +423,12 @@ static void fillPolygon(const Polygon90& area,
       const int num_mask = std::max(num_masks, 1);
       int cnt = 0;
       for (auto& f : polygons) {
-        int mask = cnt++ % num_mask + 1;
+        int mask;
+        if (num_mask == 1) {
+          mask = 0;  // don't write a mask for single mask layers
+        } else {
+          mask = cnt++ % num_mask + 1;
+        }
         auto x_lo = xl(f);
         auto y_lo = yl(f);
         auto x_hi = xh(f);
@@ -445,7 +449,7 @@ void DensityFill::fillLayer(dbBlock* block,
                             dbTechLayer* layer,
                             const odb::Rect& fill_bounds_rect)
 {
-  logger_->info(FIN, 3, "Filling layer {}", layer->getConstName());
+  logger_->info(FIN, 3, "Filling layer {}.", layer->getConstName());
 
   Polygon90Set non_fill = orNonFills(block, layer);
 
@@ -483,7 +487,7 @@ void DensityFill::fillLayer(dbBlock* block,
                 graphics_.get(),
                 &non_opc_fill_area);
   }
-  logger_->info(FIN, 4, "Total fills: {}", block->getFills().size());
+  logger_->info(FIN, 4, "Total fills: {}.", block->getFills().size());
 
   if (!cfg.has_opc) {
     return;
@@ -508,7 +512,7 @@ void DensityFill::fillLayer(dbBlock* block,
         polygon, layer, block, cfg.opc, cfg.num_masks, true, graphics_.get());
   }
 
-  logger_->info(FIN, 6, "Total fills = {}", block->getFills().size());
+  logger_->info(FIN, 6, "Total fills: {}.", block->getFills().size());
 
   if (graphics_) {
     graphics_->status("OPC Area");
@@ -528,7 +532,7 @@ void DensityFill::fill(const char* cfg_filename, const odb::Rect& fill_area)
   for (dbTechLayer* layer : tech->getLayers()) {
     auto it = layers_.find(layer);
     if (it == layers_.end()) {
-      logger_->warn(FIN, 10, "skipping layer {}.", layer->getConstName());
+      logger_->warn(FIN, 10, "Skipping layer {}.", layer->getConstName());
       continue;
     }
     fillLayer(block, layer, fill_area);

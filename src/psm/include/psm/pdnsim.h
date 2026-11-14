@@ -1,91 +1,174 @@
-/*
-BSD 3-Clause License
+// SPDX-License-Identifier: BSD-3-Clause
+// Copyright (c) 2020-2025, The OpenROAD Authors
 
-Copyright (c) 2020, The Regents of the University of Minnesota
+#pragma once
 
-All rights reserved.
-
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions are met:
-
-* Redistributions of source code must retain the above copyright notice, this
-  list of conditions and the following disclaimer.
-
-* Redistributions in binary form must reproduce the above copyright notice,
-  this list of conditions and the following disclaimer in the documentation
-  and/or other materials provided with the distribution.
-
-* Neither the name of the copyright holder nor the names of its
-  contributors may be used to endorse or promote products derived from
-  this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-*/
-
-#ifndef __PDNSim_HEADER__
-#define __PDNSim_HEADER__
-
-#include <string>
 #include <map>
+#include <memory>
+#include <optional>
+#include <string>
+#include <vector>
+
+#include "odb/PtrSetMap.h"
+#include "odb/db.h"
+#include "odb/dbBlockCallBackObj.h"
 
 namespace odb {
 class dbDatabase;
-}
+class Point;
+class dbNet;
+class dbTechLayer;
+}  // namespace odb
+
 namespace sta {
 class dbSta;
-}
+class Scene;
+}  // namespace sta
 namespace utl {
 class Logger;
 }
+namespace est {
+class EstimateParasitics;
+}
+namespace dpl {
+class Opendp;
+}
+namespace web {
+class HeatMapSourceRegistration;
+using HeatMapSourceHandle = std::shared_ptr<HeatMapSourceRegistration>;
+}  // namespace web
 
 namespace psm {
+class IRDropDataSource;
+class IRSolver;
+class IRNetwork;
 
-class PDNSim
+enum class GeneratedSourceType
+{
+  kFull,
+  kStraps,
+  kBumps
+};
+
+class PDNSim : public odb::dbBlockCallBackObj
 {
  public:
-  PDNSim();
-  ~PDNSim();
+  struct GeneratedSourceSettings
+  {
+    // Bumps
+    int bump_dx = 140;
+    int bump_dy = 140;
+    int bump_size = 70;
+    int bump_interval = 3;
 
-  void init(utl::Logger* logger, odb::dbDatabase* db, sta::dbSta* sta);
-  void reset();
+    // Straps
+    int strap_track_pitch = 10;
 
-  void import_vsrc_cfg(std::string vsrc);
-  void import_out_file(std::string out_file);
-  void import_em_out_file(std::string em_out_file);
-  void import_enable_em(int enable_em);
-  void import_spice_out_file(std::string out_file);
-  void set_power_net(std::string net);
-  void set_bump_pitch_x(float bump_pitch);
-  void set_bump_pitch_y(float bump_pitch);
-  void set_pdnsim_net_voltage(std::string net, float voltage);
-  int  analyze_power_grid();
-  void write_pg_spice();
+    // Source resistance
+    float resistance = 0.0;  // Ohms
+  };
 
-  int check_connectivity();
+  using IRDropByPoint = std::map<odb::Point, double>;
+  using IRDropByLayer = odb::PtrMap<odb::dbTechLayer, IRDropByPoint>;
+
+  PDNSim(utl::Logger* logger,
+         odb::dbDatabase* db,
+         sta::dbSta* sta,
+         est::EstimateParasitics* estimate_parasitics,
+         dpl::Opendp* opendp);
+  ~PDNSim() override;
+
+  void setNetVoltage(odb::dbNet* net, sta::Scene* corner, double voltage);
+  void setInterchipResistance(sta::Scene* scene, double resistance);
+  void setInstPower(odb::dbInst* inst, sta::Scene* corner, float power);
+  void analyzePowerGrid(odb::dbNet* net,
+                        sta::Scene* corner,
+                        GeneratedSourceType source_type,
+                        const std::string& voltage_file,
+                        bool use_prev_solution,
+                        bool enable_em,
+                        const std::string& em_file,
+                        const std::string& error_file,
+                        const std::string& voltage_source_file);
+  void writeSpiceNetwork(odb::dbNet* net,
+                         sta::Scene* corner,
+                         GeneratedSourceType source_type,
+                         const std::string& spice_file,
+                         const std::string& voltage_source_file);
+  void getIRDropForLayer(odb::dbNet* net,
+                         sta::Scene* corner,
+                         odb::dbTechLayer* layer,
+                         IRDropByPoint& ir_drop) const;
+  bool checkConnectivity(odb::dbNet* net,
+                         bool floorplanning,
+                         const std::string& error_file,
+                         bool require_bterm);
+  void setDebugGui(bool enable);
+
+  void clearSolvers();
+  void clearSolutions(sta::Scene* corner);
+
+  void setGeneratedSourceSettings(const GeneratedSourceSettings& settings);
+
+  // from dbBlockCallBackObj
+  void inDbPostMoveInst(odb::dbInst*) override;
+  void inDbNetDestroy(odb::dbNet*) override;
+  void inDbBTermPostConnect(odb::dbBTerm*) override;
+  void inDbBTermPostDisConnect(odb::dbBTerm*, odb::dbNet*) override;
+  void inDbBPinCreate(odb::dbBPin*) override;
+  void inDbBPinAddBox(odb::dbBox*) override;
+  void inDbBPinRemoveBox(odb::dbBox*) override;
+  void inDbBPinDestroy(odb::dbBPin*) override;
+  void inDbSWireAddSBox(odb::dbSBox*) override;
+  void inDbSWireRemoveSBox(odb::dbSBox*) override;
+  void inDbSWirePostDestroySBoxes(odb::dbSWire*) override;
+  void inDbFillCreate(odb::dbFill*) override;
+
+  void getIRDropForLayer(odb::dbNet* net,
+                         odb::dbTechLayer* layer,
+                         IRDropByPoint& ir_drop) const;
+
+  // Functions of decap cells
+  void addDecapMaster(odb::dbMaster* decap_master, double decap_cap);
+  void insertDecapCells(double target, const char* net_name);
+
+  odb::dbNet* getLastAnalyzedNet() const { return last_net_; }
+  sta::Scene* getLastAnalyzedCorner() const { return last_corner_; }
 
  private:
-  odb::dbDatabase*             _db;
-  sta::dbSta*                  _sta;
-  utl::Logger*                 _logger;
-  std::string                  _vsrc_loc;
-  std::string                  _out_file;
-  std::string                  _em_out_file;
-  int                          _enable_em;
-  int                          _bump_pitch_x;
-  int                          _bump_pitch_y;
-  std::string                  _spice_out_file;
-  std::string                  _power_net;
-  std::map<std::string, float> _net_voltage_map;
+  // Functions of decap cells
+  odb::dbTechLayer* getLowestLayer(odb::dbNet* db_net);
+  odb::dbNet* findPowerNet(const char* net_name);
+  odb::dbChipNet* findChipNet(odb::dbNet* local_net) const;
+  std::unique_ptr<IRSolver> makeAssemblySolver(odb::dbChipNet* net,
+                                               sta::Scene* scene);
+
+  void checkAssemblyConnectivity(IRNetwork& network,
+                                 bool floorplanning,
+                                 bool require_bterm,
+                                 const std::string& error_file);
+
+  IRSolver* getIRSolver(odb::dbNet* net, bool floorplanning);
+
+  odb::dbDatabase* db_ = nullptr;
+  sta::dbSta* sta_ = nullptr;
+  est::EstimateParasitics* estimate_parasitics_ = nullptr;
+  dpl::Opendp* opendp_ = nullptr;
+  utl::Logger* logger_ = nullptr;
+
+  web::HeatMapSourceHandle heatmap_source_;
+
+  bool debug_gui_enabled_ = false;
+
+  GeneratedSourceSettings generated_source_settings_;
+  std::map<sta::Scene*, double> interchip_resistances_;
+  odb::PtrMap<odb::dbNet, std::unique_ptr<IRSolver>> solvers_;
+  odb::PtrMap<odb::dbChipNet, std::map<sta::Scene*, std::unique_ptr<IRSolver>>>
+      assembly_solvers_;
+  odb::PtrMap<odb::dbNet, std::map<sta::Scene*, double>> user_voltages_;
+  odb::PtrMap<odb::dbInst, std::map<sta::Scene*, float>> user_powers_;
+
+  odb::dbNet* last_net_ = nullptr;
+  sta::Scene* last_corner_ = nullptr;
 };
 }  // namespace psm
-
-#endif

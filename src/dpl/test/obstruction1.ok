@@ -1,65 +1,26 @@
-# Helper functions common to multiple regressions.
-set test_dir [file dirname [file normalize [info script]]]
-set result_dir [file join $test_dir "results"]
-proc make_result_file { filename } {
-  variable result_dir
-  if { ![file exists $result_dir] } {
-    file mkdir $result_dir
-  }
-  return [file join $result_dir $filename]
-}
-# puts [exec cat $file] without forking.
-proc report_file { file } {
-  set stream [open $file r]
-  
-  while { [gets $stream line] >= 0 } {
-    puts $line
-  }
-  close $stream
-}
-proc diff_files { file1 file2 } {
-  set stream1 [open $file1 r]
-  set stream2 [open $file2 r]
-  
-  set line 1
-  set diff_line 0;
-  while { [gets $stream1 line1] >= 0 && [gets $stream2 line2] >= 0 } {
-    if { $line1 != $line2 } {
-      set diff_line $line
-      break
-    }
-    incr line
-  }
-  close $stream1
-  close $stream2
-  if { $diff_line } {
-    puts "Differences found at line $diff_line."
-    puts "$line1"
-    puts "$line2"
-    return 1
-  } else {
-    puts "No differences found."
-    return 0
-  }
-}
-[INFO ODB-0222] Reading LEF file: Nangate45/Nangate45.lef
-[INFO ODB-0223]     Created 22 technology layers
-[INFO ODB-0224]     Created 27 technology vias
-[INFO ODB-0225]     Created 134 library cells
-[INFO ODB-0226] Finished LEF file:  Nangate45/Nangate45.lef
-[INFO ODB-0222] Reading LEF file: obstruction1.lef
-[INFO ODB-0225]     Created 1 library cells
-[INFO ODB-0226] Finished LEF file:  obstruction1.lef
-[INFO ODB-0127] Reading DEF file: obstruction1.def
+[INFO ODB-0227] LEF file: Nangate45/Nangate45.lef, created 22 layers, 27 vias, 135 library cells
+[INFO ODB-0227] LEF file: obstruction1.lef, created 1 library cells
 [INFO ODB-0128] Design: aes_cipher_top
 [INFO ODB-0131]     Created 121 components and 621 component-terminals.
-[INFO ODB-0134] Finished DEF file: obstruction1.def
-[WARNING DPL-0011] Could not find power special net.
-Placement Analysis
+[INFO DPL-0006] Core area: 160139.98 um^2
+[INFO DPL-0007] Movable instances area: 118.10 um^2
+[INFO DPL-0008] Fixed instances area within core: 57683.98 um^2
+[INFO DPL-0009] Utilization: 36.1%
+[INFO DPL-0005] Diamond search max displacement: +/- 500 sites horizontally, +/- 100 rows vertically.
+[INFO DPL-1102] Legalizing using negotiation legalizer.
+[INFO DPL-1103] Negotiation base search window: +/-20 sites horizontally, +/-5 rows vertically 
+	Automatic search window extension enabled.
+	Search window extendable up to the max displacement cap of +/-500 sites, +/-100 rows near walls.
+[INFO DPL-1104] NegotiationLegalizer DRC penalty: 5.
+[INFO DPL-0392] Negotiation cell height distribution (1 unique row-count(s)):
+[INFO DPL-0393]   height 1 row(s): 117 cells
+Detailed Placement Analysis
 ---------------------------------
-total displacement         47.3 u
-average displacement        0.4 u
-max displacement            0.7 u
+legalizer            negotiation
+total moves                   0
+total displacement        115.4 u
+average displacement        1.0 u
+max displacement            2.1 u
 original HPWL               0.0 u
 legalized HPWL              0.0 u
 delta HPWL                    0 %

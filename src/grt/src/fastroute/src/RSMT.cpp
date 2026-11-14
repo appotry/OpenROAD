@@ -1,213 +1,95 @@
-////////////////////////////////////////////////////////////////////////////////
-// BSD 3-Clause License
-//
-// Copyright (c) 2018, Iowa State University All rights reserved.
-//
-// Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions are met:
-//
-// * Redistributions of source code must retain the above copyright notice,
-// this list of conditions and the following disclaimer.
-//
-// * Redistributions in binary form must reproduce the above copyright notice,
-// this list of conditions and the following disclaimer in the documentation
-// and/or other materials provided with the distribution.
-//
-// * Neither the name of the copyright holder nor the names of its contributors
-// may be used to endorse or promote products derived from this software
-// without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
-// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-// POSSIBILITY OF SUCH DAMAGE.
-////////////////////////////////////////////////////////////////////////////////
-
-#include "RSMT.h"
-
-#include <math.h>
-#include <stdio.h>
-#include <stdlib.h>
+// SPDX-License-Identifier: BSD-3-Clause
+// Copyright (c) 2018-2025, The OpenROAD Authors
 
 #include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstdint>
+#include <map>
+#include <tuple>
+#include <vector>
 
-#include "DataProc.h"
+#include "AbstractFastRouteRenderer.h"
 #include "DataType.h"
-#include "EdgeShift.h"
-#include "RipUp.h"
-#include "flute.h"
-#include "pdrev/pdrev.h"
-#include "route.h"
-#include "utility.h"
-#include "utl/Logger.h"
+#include "FastRoute.h"
+#include "odb/geom.h"
+#include "stt/SteinerTreeBuilder.h"
 #include "utl/Logger.h"
 
 namespace grt {
 
 using utl::GRT;
 
-#define FLUTEACCURACY 2
-
-struct pnt
+struct Pnt
 {
-  DTYPE x, y;
+  int x, y;
   int o;
 };
 
-struct wire
-{
-  int x1, y1, x2, y2;
-  int netID;
-};
-
-// global variable
-// ** V_table;
-// int ** H_table;
-
-static int ordery1(const void* a, const void* b)
-{
-  struct wire *pa, *pb;
-
-  pa = *(struct wire**) a;
-  pb = *(struct wire**) b;
-
-  if (pa->y1 < pb->y1)
-    return -1;
-  if (pa->y1 > pb->y1)
-    return 1;
-  return 0;
-  // return ((struct Segment*)a->x1-(struct Segment*)b->x1);
-}
-
-static int ordery2(const void* a, const void* b)
-{
-  struct wire *pa, *pb;
-
-  pa = *(struct wire**) a;
-  pb = *(struct wire**) b;
-
-  if (pa->y2 < pb->y2)
-    return -1;
-  if (pa->y2 > pb->y2)
-    return 1;
-  return 0;
-  // return ((struct Segment*)a->x1-(struct Segment*)b->x1);
-}
-
-static int orderx1(const void* a, const void* b)
-{
-  struct wire *pa, *pb;
-
-  pa = *(struct wire**) a;
-  pb = *(struct wire**) b;
-
-  if (pa->x1 < pb->x1)
-    return -1;
-  if (pa->x1 > pb->x1)
-    return 1;
-  return 0;
-  // return ((struct Segment*)a->x1-(struct Segment*)b->x1);
-}
-
-static int orderx2(const void* a, const void* b)
-{
-  struct wire *pa, *pb;
-
-  pa = *(struct wire**) a;
-  pb = *(struct wire**) b;
-
-  if (pa->x2 < pb->x2)
-    return -1;
-  if (pa->x2 > pb->x2)
-    return 1;
-  return 0;
-  // return ((struct Segment*)a->x1-(struct Segment*)b->x1);
-}
-
-int orderx(const struct pnt* a, const struct pnt* b)
+static int orderx(const Pnt* a, const Pnt* b)
 {
   return a->x < b->x;
 }
 
-static int ordery(const struct pnt* a, const struct pnt* b)
+static int ordery(const Pnt* a, const Pnt* b)
 {
   return a->y < b->y;
 }
 
 // binary search to map the new coordinates to original coordinates
-int mapxy(int nx, int xs[], int nxs[], int d)
+static int mapxy(const int nx,
+                 const std::vector<int>& xs,
+                 const std::vector<int>& nxs,
+                 const int d)
 {
-  int max, min, mid;
-
-  min = 0;
-  max = d - 1;
+  int min = 0;
+  int max = d - 1;
 
   while (min <= max) {
-    mid = (min + max) / 2;
-    if (nx == nxs[mid])
+    const int mid = (min + max) / 2;
+    if (nx == nxs[mid]) {
       return (xs[mid]);
-    if (nx < nxs[mid])
+    }
+    if (nx < nxs[mid]) {
       max = mid - 1;
-    else
+    } else {
       min = mid + 1;
+    }
   }
-
-  debugPrint(logger, GRT, "fastroute", 3, "Fail when mapping coordinates");
 
   return -1;
 }
 
-void copyStTree(int ind, Tree rsmt)
+void FastRouteCore::copyStTree(const int ind, const stt::Tree& rsmt)
 {
-  int i, d, numnodes, numedges;
-  int n, x1, y1, x2, y2, edgecnt;
-  TreeEdge* treeedges;
-  TreeNode* treenodes;
+  const int d = rsmt.deg;
+  const int numnodes = rsmt.branchCount();
+  const int numedges = numnodes - 1;
+  sttrees_[ind].num_terminals = d;
+  sttrees_[ind].nodes.resize(numnodes);
+  sttrees_[ind].edges.resize(numedges);
 
-  // TODO: check this size
-  const int sizeV = 2 * nets[ind]->numPins;
-  int nbrcnt[sizeV];
-
-  d = rsmt.deg;
-  sttrees[ind].deg = d;
-  numnodes = 2 * d - 2;
-  numedges = 2 * d - 3;
-  sttrees[ind].nodes = new TreeNode[numnodes];
-  sttrees[ind].edges = new TreeEdge[numedges];
-
-  treenodes = sttrees[ind].nodes;
-  treeedges = sttrees[ind].edges;
+  auto& treenodes = sttrees_[ind].nodes;
+  auto& treeedges = sttrees_[ind].edges;
 
   // initialize the nbrcnt for treenodes
-  for (i = 0; i < numnodes; i++)
-    nbrcnt[i] = 0;
+  const int sizeV = 2 * nets_[ind]->getNumPins();
+  std::vector<int> nbrcnt(sizeV, 0);
 
-  edgecnt = 0;
+  int edgecnt = 0;
   // original rsmt has 2*d-2 branch (one is a loop for root), in StTree 2*d-3
   // edges (no original loop)
-  for (i = 0; i < numnodes; i++) {
-    x1 = rsmt.branch[i].x;
-    y1 = rsmt.branch[i].y;
-    n = rsmt.branch[i].n;
-    x2 = rsmt.branch[n].x;
-    y2 = rsmt.branch[n].y;
+  for (int i = 0; i < numnodes; i++) {
+    const int x1 = rsmt.branch[i].x;
+    const int y1 = rsmt.branch[i].y;
+    const int n = rsmt.branch[i].n;
+    const int x2 = rsmt.branch[n].x;
+    const int y2 = rsmt.branch[n].y;
     treenodes[i].x = x1;
     treenodes[i].y = y1;
-    if (i < d) {
-      treenodes[i].status = 2;
-    } else {
-      treenodes[i].status = 0;
-    }
-    if (n != i)  // not root
-    {
-      treeedges[edgecnt].len = ADIFF(x1, x2) + ADIFF(y1, y2);
+    treenodes[i].status = (i < d) ? 2 : 0;
+    if (n != i) {  // not root
+      treeedges[edgecnt].len = abs(x1 - x2) + abs(y1 - y2);
       // make x1 always less than x2
       if (x1 < x2) {
         treeedges[edgecnt].n1 = i;
@@ -216,6 +98,7 @@ void copyStTree(int ind, Tree rsmt)
         treeedges[edgecnt].n1 = n;
         treeedges[edgecnt].n2 = i;
       }
+      treeedges[edgecnt].route.grids.clear();
       treenodes[i].nbr[nbrcnt[i]] = n;
       treenodes[i].edge[nbrcnt[i]] = edgecnt;
       treenodes[n].nbr[nbrcnt[n]] = i;
@@ -225,144 +108,124 @@ void copyStTree(int ind, Tree rsmt)
       nbrcnt[n]++;
       edgecnt++;
     }
-    if (nbrcnt[i] > 3 || nbrcnt[n] > 3)
-      logger->error(GRT, 188, "Invalid number of node neighbours.");
+    if (nbrcnt[i] > 3 || nbrcnt[n] > 3) {
+      logger_->error(GRT, 188, "Invalid number of node neighbors.");
+    }
   }
+
+  // Map the node indices to the pin indices of the net
+  std::map<odb::Point, int> pos_count;
+  for (int i = 0; i < d; i++) {
+    odb::Point pos{treenodes[i].x, treenodes[i].y};
+    pos_count[pos]++;
+    const int pin_idx = nets_[ind]->getPinIdxFromPosition(
+        treenodes[i].x, treenodes[i].y, pos_count[pos]);
+    sttrees_[ind].node_to_pin_idx[i] = pin_idx;
+  }
+
+  // Copy num neighbors
+  for (int i = 0; i < numnodes; i++) {
+    treenodes[i].nbr_count = nbrcnt[i];
+  }
+
   if (edgecnt != numnodes - 1) {
-    logger->error(GRT, 189, "Fail in copy tree. Num edges: {}, num nodes: {}, edgecnt, numnodes.");
+    logger_->error(
+        GRT,
+        189,
+        "Failure in copy tree. Number of edges: {}. Number of nodes: {}.",
+        edgecnt,
+        numnodes);
   }
 }
 
-void fluteNormal(int netID,
-                 int d,
-                 DTYPE x[],
-                 DTYPE y[],
-                 int acc,
-                 float coeffV,
-                 Tree* t)
+void FastRouteCore::fluteNormal(const int netID,
+                                const std::vector<int>& x,
+                                const std::vector<int>& y,
+                                const int acc,
+                                const float coeffV,
+                                stt::Tree& t)
 {
-  DTYPE *xs, *ys, minval, x_max, x_min, x_mid, y_max, y_min, y_mid, *tmp_xs,
-      *tmp_ys;
-  int* s;
-  int i, j, k, minidx;
-  struct pnt *pt, *tmpp;
+  const int d = x.size();
 
   if (d == 2) {
-    t->deg = 2;
-    t->length = ADIFF(x[0], x[1]) + ADIFF(y[0], y[1]);
-    t->branch = new Branch[2];
-    t->branch[0].x = x[0];
-    t->branch[0].y = y[0];
-    t->branch[0].n = 1;
-    t->branch[1].x = x[1];
-    t->branch[1].y = y[1];
-    t->branch[1].n = 1;
+    t.deg = 2;
+    t.length = abs(x[0] - x[1]) + abs(y[0] - y[1]);
+    t.branch.resize(2);
+    t.branch[0].x = x[0];
+    t.branch[0].y = y[0];
+    t.branch[0].n = 1;
+    t.branch[1].x = x[1];
+    t.branch[1].y = y[1];
+    t.branch[1].n = 1;
   } else if (d == 3) {
-    t->deg = 3;
-    if (x[0] < x[1]) {
-      if (x[0] < x[2]) {
-        x_min = x[0];
-        x_mid = std::min(x[1], x[2]);
-        x_max = std::max(x[1], x[2]);
-      } else {
-        x_min = x[2];
-        x_mid = x[0];
-        x_max = x[1];
-      }
-    } else {
-      if (x[0] < x[2]) {
-        x_min = x[1];
-        x_mid = x[0];
-        x_max = x[2];
-      } else {
-        x_min = std::min(x[1], x[2]);
-        x_mid = std::max(x[1], x[2]);
-        x_max = x[0];
-      }
-    }
-    if (y[0] < y[1]) {
-      if (y[0] < y[2]) {
-        y_min = y[0];
-        y_mid = std::min(y[1], y[2]);
-        y_max = std::max(y[1], y[2]);
-      } else {
-        y_min = y[2];
-        y_mid = y[0];
-        y_max = y[1];
-      }
-    } else {
-      if (y[0] < y[2]) {
-        y_min = y[1];
-        y_mid = y[0];
-        y_max = y[2];
-      } else {
-        y_min = std::min(y[1], y[2]);
-        y_mid = std::max(y[1], y[2]);
-        y_max = y[0];
-      }
-    }
+    t.deg = 3;
+    // Sort the 3 pin coordinates to find the bounding box extents (min/max)
+    // and the middle value, which becomes the Steiner point position.
+    std::array<int, 3> xs_arr = {x[0], x[1], x[2]};
+    std::ranges::sort(xs_arr);
+    const auto [x_min, x_mid, x_max] = xs_arr;
 
-    t->length = ADIFF(x_max, x_min) + ADIFF(y_max, y_min);
-    t->branch = new Branch[4];
-    t->branch[0].x = x[0];
-    t->branch[0].y = y[0];
-    t->branch[0].n = 3;
-    t->branch[1].x = x[1];
-    t->branch[1].y = y[1];
-    t->branch[1].n = 3;
-    t->branch[2].x = x[2];
-    t->branch[2].y = y[2];
-    t->branch[2].n = 3;
-    t->branch[3].x = x_mid;
-    t->branch[3].y = y_mid;
-    t->branch[3].n = 3;
+    std::array<int, 3> ys_arr = {y[0], y[1], y[2]};
+    std::ranges::sort(ys_arr);
+    const auto [y_min, y_mid, y_max] = ys_arr;
+
+    t.length = abs(x_max - x_min) + abs(y_max - y_min);
+    t.branch.resize(4);
+    t.branch[0].x = x[0];
+    t.branch[0].y = y[0];
+    t.branch[0].n = 3;
+    t.branch[1].x = x[1];
+    t.branch[1].y = y[1];
+    t.branch[1].n = 3;
+    t.branch[2].x = x[2];
+    t.branch[2].y = y[2];
+    t.branch[2].n = 3;
+    t.branch[3].x = x_mid;
+    t.branch[3].y = y_mid;
+    t.branch[3].n = 3;
   } else {
-    stt::Tree fluteTree;
-    xs = new DTYPE[d];
-    ys = new DTYPE[d];
+    std::vector<int> xs(d);
+    std::vector<int> ys(d);
 
-    tmp_xs = new DTYPE[d];
-    tmp_ys = new DTYPE[d];
+    std::vector<int> tmp_xs(d);
+    std::vector<int> tmp_ys(d);
+    std::vector<int> s(d);
+    Pnt* pt = new Pnt[d];
+    std::vector<Pnt*> ptp(d);
 
-    s = new int[d];
-    pt = new struct pnt[d];
-    std::vector<struct pnt*> ptp(d);
-
-    for (i = 0; i < d; i++) {
+    for (int i = 0; i < d; i++) {
       pt[i].x = x[i];
       pt[i].y = y[i];
       ptp[i] = &pt[i];
     }
 
     if (d < 1000) {
-      for (i = 0; i < d - 1; i++) {
-        minval = ptp[i]->x;
-        minidx = i;
-        for (j = i + 1; j < d; j++) {
+      for (int i = 0; i < d - 1; i++) {
+        int minval = ptp[i]->x;
+        int minidx = i;
+        for (int j = i + 1; j < d; j++) {
           if (minval > ptp[j]->x) {
             minval = ptp[j]->x;
             minidx = j;
           }
         }
-        tmpp = ptp[i];
-        ptp[i] = ptp[minidx];
-        ptp[minidx] = tmpp;
+        std::swap(ptp[i], ptp[minidx]);
       }
     } else {
-      std::stable_sort(ptp.begin(), ptp.end(), orderx);
+      std::ranges::stable_sort(ptp, orderx);
     }
 
-    for (i = 0; i < d; i++) {
+    for (int i = 0; i < d; i++) {
       xs[i] = ptp[i]->x;
       ptp[i]->o = i;
     }
 
     // sort y to find s[]
     if (d < 1000) {
-      for (i = 0; i < d - 1; i++) {
-        minval = ptp[i]->y;
-        minidx = i;
-        for (j = i + 1; j < d; j++) {
+      for (int i = 0; i < d - 1; i++) {
+        int minval = ptp[i]->y;
+        int minidx = i;
+        for (int j = i + 1; j < d; j++) {
           if (minval > ptp[j]->y) {
             minval = ptp[j]->y;
             minidx = j;
@@ -375,176 +238,130 @@ void fluteNormal(int netID,
       ys[d - 1] = ptp[d - 1]->y;
       s[d - 1] = ptp[d - 1]->o;
     } else {
-      std::stable_sort(ptp.begin(), ptp.end(), ordery);
-      for (i = 0; i < d; i++) {
+      std::ranges::stable_sort(ptp, ordery);
+      for (int i = 0; i < d; i++) {
         ys[i] = ptp[i]->y;
         s[i] = ptp[i]->o;
       }
     }
 
-    gxs[netID] = new DTYPE[d];
-    gys[netID] = new DTYPE[d];
-    gs[netID] = new DTYPE[d];
+    gxs_[netID].resize(d);
+    gys_[netID].resize(d);
+    gs_[netID].resize(d);
 
-    for (i = 0; i < d; i++) {
-      gxs[netID][i] = xs[i];
-      gys[netID][i] = ys[i];
-      gs[netID][i] = s[i];
+    for (int i = 0; i < d; i++) {
+      gxs_[netID][i] = xs[i];
+      gys_[netID][i] = ys[i];
+      gs_[netID][i] = s[i];
 
       tmp_xs[i] = xs[i] * 100;
-      tmp_ys[i] = ys[i] * ((int) (100 * coeffV));
+      tmp_ys[i] = ys[i] * static_cast<int>(100 * coeffV);
     }
 
-    fluteTree = stt::flutes(d, tmp_xs, tmp_ys, s, acc);
-    (*t) = fluteToTree(fluteTree);
+    t = stt_builder_->makeSteinerTree(tmp_xs, tmp_ys, s, acc);
 
-    for (i = 0; i < 2 * d - 2; i++) {
-      t->branch[i].x = t->branch[i].x / 100;
-      t->branch[i].y = t->branch[i].y / ((int) (100 * coeffV));
+    for (auto& branch : t.branch) {
+      branch.x /= 100;
+      branch.y /= static_cast<int>(100 * coeffV);
     }
 
-    delete[] xs;
-    delete[] ys;
-    delete[] tmp_xs;
-    delete[] tmp_ys;
-    delete[] s;
     delete[] pt;
   }
 }
 
-void fluteCongest(int netID,
-                  int d,
-                  DTYPE x[],
-                  DTYPE y[],
-                  int acc,
-                  float coeffV,
-                  Tree* t)
+void FastRouteCore::fluteCongest(const int netID,
+                                 const std::vector<int>& x,
+                                 const std::vector<int>& y,
+                                 const int acc,
+                                 const float coeffV,
+                                 stt::Tree& t)
 {
-  DTYPE *xs, *ys, *nxs, *nys, *x_seg, *y_seg, minval, x_max, x_min, x_mid,
-      y_max, y_min, y_mid;
-  int* s;
-  int i, j, k, minidx, grid;
-  DTYPE height, width;
-  int usageH, usageV;
-  float coeffH = 1;
-  //  float coeffV = 2;//1.36;//hCapacity/vCapacity;//1;//
+  const float coeffH = 1;
+  const int d = x.size();
 
   if (d == 2) {
-    t->deg = 2;
-    t->length = ADIFF(x[0], x[1]) + ADIFF(y[0], y[1]);
-    t->branch = new Branch[2];
-    t->branch[0].x = x[0];
-    t->branch[0].y = y[0];
-    t->branch[0].n = 1;
-    t->branch[1].x = x[1];
-    t->branch[1].y = y[1];
-    t->branch[1].n = 1;
+    t.deg = 2;
+    t.length = abs(x[0] - x[1]) + abs(y[0] - y[1]);
+    t.branch.resize(2);
+    t.branch[0].x = x[0];
+    t.branch[0].y = y[0];
+    t.branch[0].n = 1;
+    t.branch[1].x = x[1];
+    t.branch[1].y = y[1];
+    t.branch[1].n = 1;
   } else if (d == 3) {
-    t->deg = 3;
-    if (x[0] < x[1]) {
-      if (x[0] < x[2]) {
-        x_min = x[0];
-        x_mid = std::min(x[1], x[2]);
-        x_max = std::max(x[1], x[2]);
-      } else {
-        x_min = x[2];
-        x_mid = x[0];
-        x_max = x[1];
-      }
-    } else {
-      if (x[0] < x[2]) {
-        x_min = x[1];
-        x_mid = x[0];
-        x_max = x[2];
-      } else {
-        x_min = std::min(x[1], x[2]);
-        x_mid = std::max(x[1], x[2]);
-        x_max = x[0];
-      }
-    }
-    if (y[0] < y[1]) {
-      if (y[0] < y[2]) {
-        y_min = y[0];
-        y_mid = std::min(y[1], y[2]);
-        y_max = std::max(y[1], y[2]);
-      } else {
-        y_min = y[2];
-        y_mid = y[0];
-        y_max = y[1];
-      }
-    } else {
-      if (y[0] < y[2]) {
-        y_min = y[1];
-        y_mid = y[0];
-        y_max = y[2];
-      } else {
-        y_min = std::min(y[1], y[2]);
-        y_mid = std::max(y[1], y[2]);
-        y_max = y[0];
-      }
-    }
+    t.deg = 3;
+    // Sort the 3 pin coordinates to find the bounding box extents (min/max)
+    // and the middle value, which becomes the Steiner point position.
+    std::array<int, 3> xs_arr = {x[0], x[1], x[2]};
+    std::ranges::sort(xs_arr);
+    const auto [x_min, x_mid, x_max] = xs_arr;
 
-    t->length = ADIFF(x_max, x_min) + ADIFF(y_max, y_min);
-    t->branch = new Branch[4];
-    t->branch[0].x = x[0];
-    t->branch[0].y = y[0];
-    t->branch[0].n = 3;
-    t->branch[1].x = x[1];
-    t->branch[1].y = y[1];
-    t->branch[1].n = 3;
-    t->branch[2].x = x[2];
-    t->branch[2].y = y[2];
-    t->branch[2].n = 3;
-    t->branch[3].x = x_mid;
-    t->branch[3].y = y_mid;
-    t->branch[3].n = 3;
+    std::array<int, 3> ys_arr = {y[0], y[1], y[2]};
+    std::ranges::sort(ys_arr);
+    const auto [y_min, y_mid, y_max] = ys_arr;
+
+    t.length = abs(x_max - x_min) + abs(y_max - y_min);
+    t.branch.resize(4);
+    t.branch[0].x = x[0];
+    t.branch[0].y = y[0];
+    t.branch[0].n = 3;
+    t.branch[1].x = x[1];
+    t.branch[1].y = y[1];
+    t.branch[1].n = 3;
+    t.branch[2].x = x[2];
+    t.branch[2].y = y[2];
+    t.branch[2].n = 3;
+    t.branch[3].x = x_mid;
+    t.branch[3].y = y_mid;
+    t.branch[3].n = 3;
   } else {
-    stt::Tree fluteTree;
-    xs = new DTYPE[d];
-    ys = new DTYPE[d];
-    nxs = new DTYPE[d];
-    nys = new DTYPE[d];
-    x_seg = new DTYPE[d - 1];
-    y_seg = new DTYPE[d - 1];
-    s = new int[d];
+    std::vector<int> xs(d);
+    std::vector<int> ys(d);
+    std::vector<int> nxs(d);
+    std::vector<int> nys(d);
+    std::vector<int> x_seg(d - 1);
+    std::vector<int> y_seg(d - 1);
+    std::vector<int> s(d);
 
-    for (i = 0; i < d; i++) {
-      xs[i] = gxs[netID][i];
-      ys[i] = gys[netID][i];
-      s[i] = gs[netID][i];
+    for (int i = 0; i < d; i++) {
+      xs[i] = gxs_[netID][i];
+      ys[i] = gys_[netID][i];
+      s[i] = gs_[netID][i];
     }
 
     // get the new coordinates considering congestion
-    for (i = 0; i < d - 1; i++) {
+    for (int i = 0; i < d - 1; i++) {
       x_seg[i] = (xs[i + 1] - xs[i]) * 100;
       y_seg[i] = (ys[i + 1] - ys[i]) * 100;
     }
 
-    height = ys[d - 1] - ys[0] + 1;  // # vertical grids the net span
-    width = xs[d - 1] - xs[0] + 1;   // # horizontal grids the net span
+    const int height = ys[d - 1] - ys[0] + 1;  // # vertical grids the net span
+    const int width = xs[d - 1] - xs[0] + 1;  // # horizontal grids the net span
 
-    for (i = 0; i < d - 1; i++) {
-      usageH = 0;
-      for (k = ys[0]; k <= ys[d - 1]; k++)  // all grids in the column
+    for (int i = 0; i < d - 1; i++) {
+      int usageH = 0;
+      for (int k = ys[0]; k <= ys[d - 1]; k++)  // all grids in the column
       {
-        grid = k * (xGrid - 1);
-        for (j = xs[i]; j < xs[i + 1]; j++)
-          usageH += (h_edges[grid + j].est_usage + h_edges[grid + j].red);
+        for (int j = xs[i]; j < xs[i + 1]; j++) {
+          usageH += graph2d_.getEstUsageRedH(j, k);
+        }
       }
       if (x_seg[i] != 0 && usageH != 0) {
         x_seg[i]
-            *= coeffH * usageH / ((xs[i + 1] - xs[i]) * height * hCapacity);
+            *= coeffH * usageH / ((xs[i + 1] - xs[i]) * height * h_capacity_);
         x_seg[i] = std::max(1, x_seg[i]);  // the segment len is at least 1 if
                                            // original segment len > 0
       }
-      usageV = 0;
-      for (j = ys[i]; j < ys[i + 1]; j++) {
-        grid = j * xGrid;
-        for (k = xs[0]; k <= xs[d - 1]; k++)  // all grids in the row
-          usageV += (v_edges[grid + k].est_usage + v_edges[grid + k].red);
+      int usageV = 0;
+      for (int j = ys[i]; j < ys[i + 1]; j++) {
+        for (int k = xs[0]; k <= xs[d - 1]; k++) {  // all grids in the row
+          usageV += graph2d_.getEstUsageRedV(k, j);
+        }
       }
       if (y_seg[i] != 0 && usageV != 0) {
-        y_seg[i] *= coeffV * usageV / ((ys[i + 1] - ys[i]) * width * vCapacity);
+        y_seg[i]
+            *= coeffV * usageV / ((ys[i + 1] - ys[i]) * width * v_capacity_);
         y_seg[i] = std::max(1, y_seg[i]);  // the segment len is at least 1 if
                                            // original segment len > 0
       }
@@ -552,381 +369,306 @@ void fluteCongest(int netID,
 
     nxs[0] = xs[0];
     nys[0] = ys[0];
-    for (i = 0; i < d - 1; i++) {
+    for (int i = 0; i < d - 1; i++) {
       nxs[i + 1] = nxs[i] + x_seg[i];
       nys[i + 1] = nys[i] + y_seg[i];
     }
 
-    fluteTree = stt::flutes(d, nxs, nys, s, acc);
-    (*t) = fluteToTree(fluteTree);
+    t = stt_builder_->makeSteinerTree(nxs, nys, s, acc);
 
     // map the new coordinates back to original coordinates
-    for (i = 0; i < 2 * d - 2; i++) {
-      t->branch[i].x = mapxy(t->branch[i].x, xs, nxs, d);
-      t->branch[i].y = mapxy(t->branch[i].y, ys, nys, d);
+    for (auto& branch : t.branch) {
+      branch.x = mapxy(branch.x, xs, nxs, d);
+      branch.y = mapxy(branch.y, ys, nys, d);
     }
-
-    delete[] xs;
-    delete[] ys;
-    delete[] nxs;
-    delete[] nys;
-    delete[] x_seg;
-    delete[] y_seg;
-    delete[] s;
   }
-
-  // return t;
 }
 
-Bool netCongestion(int netID)
+bool FastRouteCore::netCongestion(const int netID)
 {
-  int i, j, edgeID, edgelength, *gridsX, *gridsY;
-  int n1, n2, x1, y1, x2, y2, distance, grid, ymin, ymax;
-  int cnt, Zpoint;
-  TreeEdge* treeedge;
-  TreeNode* treenodes;
-  //  Bool Congested;
-  Segment* seg;
-
-  for (j = seglistIndex[netID]; j < seglistIndex[netID] + seglistCnt[netID];
-       j++) {
-    seg = &seglist[j];
-
-    if (seg->y1 < seg->y2) {
-      ymin = seg->y1;
-      ymax = seg->y2;
-    } else {
-      ymin = seg->y2;
-      ymax = seg->y1;
-    }
+  for (const Segment& seg : seglist_[netID]) {
+    const auto [ymin, ymax] = std::minmax(seg.y1, seg.y2);
 
     // remove L routing
-    if (seg->xFirst) {
-      grid = seg->y1 * (xGrid - 1);
-      for (i = seg->x1; i < seg->x2; i++) {
-        if (h_edges[grid + i].est_usage >= h_edges[grid + i].cap) {
-          return (TRUE);
+    if (seg.xFirst) {
+      for (int i = seg.x1; i < seg.x2; i++) {
+        const int cap = getEdgeCapacity(
+            nets_[netID], i, seg.y1, EdgeDirection::Horizontal);
+        if (graph2d_.getEstUsageH(i, seg.y1) >= cap) {
+          return true;
         }
       }
-      for (i = ymin; i < ymax; i++) {
-        if (v_edges[i * xGrid + seg->x2].est_usage
-            >= v_edges[i * xGrid + seg->x2].cap) {
-          return (TRUE);
+      for (int i = ymin; i < ymax; i++) {
+        const int cap
+            = getEdgeCapacity(nets_[netID], seg.x2, i, EdgeDirection::Vertical);
+        if (graph2d_.getEstUsageV(seg.x2, i) >= cap) {
+          return true;
         }
       }
     } else {
-      for (i = ymin; i < ymax; i++) {
-        if (v_edges[i * xGrid + seg->x1].est_usage
-            >= v_edges[i * xGrid + seg->x1].cap) {
-          return (TRUE);
+      for (int i = ymin; i < ymax; i++) {
+        const int cap
+            = getEdgeCapacity(nets_[netID], seg.x1, i, EdgeDirection::Vertical);
+        if (graph2d_.getEstUsageV(seg.x1, i) >= cap) {
+          return true;
         }
       }
-      grid = seg->y2 * (xGrid - 1);
-      for (i = seg->x1; i < seg->x2; i++) {
-        if (h_edges[grid + i].est_usage >= h_edges[grid + i].cap) {
-          return (TRUE);
+      for (int i = seg.x1; i < seg.x2; i++) {
+        const int cap = getEdgeCapacity(
+            nets_[netID], i, seg.y2, EdgeDirection::Horizontal);
+        if (graph2d_.getEstUsageH(i, seg.y2) >= cap) {
+          return true;
         }
       }
     }
   }
-  return (FALSE);
+  return false;
 }
 
-Bool VTreeSuite(int netID)
+bool FastRouteCore::VTreeSuite(const int netID)
 {
-  int xmin, xmax, ymin, ymax;
+  int xmax = 0, ymax = 0;
+  int xmin = BIG_INT, ymin = BIG_INT;
 
-  int i, deg;
-
-  deg = nets[netID]->deg;
-  xmax = ymax = 0;
-  xmin = ymin = BIG_INT;
-
-  for (i = 0; i < deg; i++) {
-    if (xmin > nets[netID]->pinX[i]) {
-      xmin = nets[netID]->pinX[i];
-    }
-    if (xmax < nets[netID]->pinX[i]) {
-      xmax = nets[netID]->pinX[i];
-    }
-    if (ymin > nets[netID]->pinY[i]) {
-      ymin = nets[netID]->pinY[i];
-    }
-    if (ymax < nets[netID]->pinY[i]) {
-      ymax = nets[netID]->pinY[i];
-    }
+  const FrNet* net = nets_[netID];
+  const int deg = net->getNumPins();
+  for (int i = 0; i < deg; i++) {
+    xmin = std::min(xmin, net->getPinX(i));
+    xmax = std::max(xmax, net->getPinX(i));
+    ymin = std::min(ymin, net->getPinY(i));
+    ymax = std::max(ymax, net->getPinY(i));
   }
 
-  if ((ymax - ymin) > 3 * (xmax - xmin)) {
-    return (TRUE);
-  } else {
-    return (FALSE);
-  }
+  return (ymax - ymin) > 3 * (xmax - xmin);
 }
 
-Bool HTreeSuite(int netID)
+bool FastRouteCore::HTreeSuite(const int netID)
 {
-  int xmin, xmax, ymin, ymax;
+  int xmax = 0, ymax = 0;
+  int xmin = BIG_INT, ymin = BIG_INT;
 
-  int i, deg;
-
-  deg = nets[netID]->deg;
-  xmax = ymax = 0;
-  xmin = ymin = BIG_INT;
-
-  for (i = 0; i < deg; i++) {
-    if (xmin > nets[netID]->pinX[i]) {
-      xmin = nets[netID]->pinX[i];
-    }
-    if (xmax < nets[netID]->pinX[i]) {
-      xmax = nets[netID]->pinX[i];
-    }
-    if (ymin > nets[netID]->pinY[i]) {
-      ymin = nets[netID]->pinY[i];
-    }
-    if (ymax < nets[netID]->pinY[i]) {
-      ymax = nets[netID]->pinY[i];
-    }
+  const FrNet* net = nets_[netID];
+  const int deg = net->getNumPins();
+  for (int i = 0; i < deg; i++) {
+    xmin = std::min(xmin, net->getPinX(i));
+    xmax = std::max(xmax, net->getPinX(i));
+    ymin = std::min(ymin, net->getPinY(i));
+    ymax = std::max(ymax, net->getPinY(i));
   }
 
-  if (5 * (ymax - ymin) < (xmax - xmin)) {
-    return (TRUE);
-  } else {
-    return (FALSE);
-  }
+  return 5 * (ymax - ymin) < (xmax - xmin);
 }
 
-float coeffADJ(int netID)
+float FastRouteCore::coeffADJ(const int netID)
 {
-  int xmin, xmax, ymin, ymax, Hcap, Vcap;
-  float Husage, Vusage, coef;
+  FrNet* net = nets_[netID];
+  const int deg = net->getNumPins();
+  int xmax = 0, ymax = 0;
+  int xmin = BIG_INT, ymin = BIG_INT;
 
-  int i, j, deg, grid;
-
-  deg = nets[netID]->deg;
-  xmax = ymax = 0;
-  xmin = ymin = BIG_INT;
-  Hcap = Vcap = 0;
-  Husage = Vusage = 0;
-
-  for (i = 0; i < deg; i++) {
-    if (xmin > nets[netID]->pinX[i]) {
-      xmin = nets[netID]->pinX[i];
-    }
-    if (xmax < nets[netID]->pinX[i]) {
-      xmax = nets[netID]->pinX[i];
-    }
-    if (ymin > nets[netID]->pinY[i]) {
-      ymin = nets[netID]->pinY[i];
-    }
-    if (ymax < nets[netID]->pinY[i]) {
-      ymax = nets[netID]->pinY[i];
-    }
+  for (int i = 0; i < deg; i++) {
+    xmin = std::min(xmin, net->getPinX(i));
+    xmax = std::max(xmax, net->getPinX(i));
+    ymin = std::min(ymin, net->getPinY(i));
+    ymax = std::max(ymax, net->getPinY(i));
   }
 
+  int Hcap = 0;
+  int Vcap = 0;
+  float Husage = 0;
+  float Vusage = 0;
+  float coef;
   if (xmin == xmax) {
-    for (j = ymin; j < ymax; j++) {
-      grid = j * xGrid + xmin;
-      Vcap += v_edges[grid].cap;
-      Vusage += v_edges[grid].est_usage;
+    for (int j = ymin; j < ymax; j++) {
+      Vcap += getEdgeCapacity(net, xmin, j, EdgeDirection::Vertical);
+      Vusage += graph2d_.getEstUsageV(xmin, j);
     }
     coef = 1;
   } else if (ymin == ymax) {
-    for (i = xmin; i < xmax; i++) {
-      grid = ymin * (xGrid - 1) + i;
-      Hcap += h_edges[grid].cap;
-      Husage += h_edges[grid].est_usage;
+    for (int i = xmin; i < xmax; i++) {
+      Hcap += getEdgeCapacity(net, i, ymin, EdgeDirection::Horizontal);
+      Husage += graph2d_.getEstUsageH(i, ymin);
     }
     coef = 1;
   } else {
-    for (j = ymin; j <= ymax; j++) {
-      for (i = xmin; i < xmax; i++) {
-        grid = j * (xGrid - 1) + i;
-        Hcap += h_edges[grid].cap;
-        Husage += h_edges[grid].est_usage;
+    for (int j = ymin; j <= ymax; j++) {
+      for (int i = xmin; i < xmax; i++) {
+        Hcap += getEdgeCapacity(net, i, j, EdgeDirection::Horizontal);
+        Husage += graph2d_.getEstUsageH(i, j);
       }
     }
-    for (j = ymin; j < ymax; j++) {
-      for (i = xmin; i <= xmax; i++) {
-        grid = j * xGrid + i;
-        Vcap += v_edges[grid].cap;
-        Vusage += v_edges[grid].est_usage;
+    for (int j = ymin; j < ymax; j++) {
+      for (int i = xmin; i <= xmax; i++) {
+        Vcap += getEdgeCapacity(net, i, j, EdgeDirection::Vertical);
+        Vusage += graph2d_.getEstUsageV(i, j);
       }
     }
-    // coef  = (Husage*Vcap)/ (Hcap*Vusage);
-    coef = (Hcap * Vusage) / (Husage * Vcap);
+    // (Husage * Vcap) resulting in zero is unlikely, but
+    // this check was added to avoid undefined behavior if
+    // the expression results in zero
+    if ((Husage * Vcap) > 0) {
+      coef = (Hcap * Vusage) / (Husage * Vcap);
+    } else {
+      coef = 1.2;
+    }
   }
 
-  if (coef < 1.2) {
-    coef = 1.2;
-  }
+  coef = std::max<double>(coef, 1.2);
 
-  return (coef);
+  return coef;
 }
 
-void gen_brk_RSMT(Bool congestionDriven,
-                  Bool reRoute,
-                  Bool genTree,
-                  Bool newType,
-                  Bool noADJ,
-                  Logger* logger)
+void FastRouteCore::gen_brk_RSMT(const bool congestionDriven,
+                                 const bool reRoute,
+                                 const bool genTree,
+                                 const bool newType,
+                                 const bool noADJ)
 {
-  int i, j, d, n, n1, n2;
-  int x1, y1, x2, y2;
-  int segPos, segcnt;
-  Tree rsmt;
-  int wl, wl1, numShift = 0;
-  float coeffV;
+  stt::Tree rsmt;
+  int numShift = 0;
 
-  TreeEdge *treeedges, *treeedge;
-  TreeNode* treenodes;
+  int wl = 0;
+  int wl1 = 0;
+  int totalNumSeg = 0;
 
-  Bool cong;
+  const int flute_accuracy = 2;
 
-  wl = wl1 = 0;
-  totalNumSeg = 0;
+  for (const int& netID : net_ids_) {
+    FrNet* net = nets_[netID];
 
-  for (i = 0; i < numValidNets; i++) {
-    coeffV = 1.36;
-    int sizeV = nets[i]->numPins;
-    int x[sizeV];
-    int y[sizeV];
-
-    if (congestionDriven) {
-      coeffV = coeffADJ(i);
-      cong = netCongestion(i);
-
-    } else {
-      if (HTreeSuite(i)) {
-        coeffV = 1.2;
-      }
-    }
-
-    d = nets[i]->deg;
-    for (j = 0; j < d; j++) {
-      x[j] = nets[i]->pinX[j];
-      y[j] = nets[i]->pinY[j];
-    }
+    int d = net->getNumPins();
 
     if (reRoute) {
       if (newType) {
-        treeedges = sttrees[i].edges;
-        treenodes = sttrees[i].nodes;
-        for (j = 0; j < 2 * d - 3; j++) {
-          if (sttrees[i].edges[j].len
-              > 0)  // only route the non-degraded edges (len>0)
-          {
-            treeedge = &(treeedges[j]);
-            n1 = treeedge->n1;
-            n2 = treeedge->n2;
-            x1 = treenodes[n1].x;
-            y1 = treenodes[n1].y;
-            x2 = treenodes[n2].x;
-            y2 = treenodes[n2].y;
-            newRipup(treeedge, treenodes, x1, y1, x2, y2, i);
+        const auto& treeedges = sttrees_[netID].edges;
+        const auto& treenodes = sttrees_[netID].nodes;
+        for (int j = 0; j < sttrees_[netID].num_edges(); j++) {
+          // only route the non-degraded edges (len>0)
+          if (sttrees_[netID].edges[j].len > 0) {
+            const TreeEdge& treeedge = treeedges[j];
+            const int n1 = treeedge.n1;
+            const int n2 = treeedge.n2;
+            const int x1 = treenodes[n1].x;
+            const int y1 = treenodes[n1].y;
+            const int x2 = treenodes[n2].x;
+            const int y2 = treenodes[n2].y;
+            newRipup(&treeedge, x1, y1, x2, y2, netID);
           }
         }
       } else {
         // remove the est_usage due to the segments in this net
-        for (j = seglistIndex[i]; j < seglistIndex[i] + seglistCnt[i]; j++) {
-          ripupSegL(&seglist[j]);
+        for (auto& seg : seglist_[netID]) {
+          ripupSegL(&seg);
         }
       }
     }
 
-    if (noADJ) {
-      coeffV = 1.2;
-    }
-    if (pdRevForHighFanout > 0 && nets[i]->deg >= pdRevForHighFanout
-        && nets[i]->isClock) {
-      PD::PdRev* pd = new PD::PdRev(logger);
-      std::vector<unsigned> vecX(x, x + d);
-      std::vector<unsigned> vecY(y, y + d);
-      pd->setAlphaPDII(nets[i]->alpha);
-      pd->addNet(d, vecX, vecY);
-      pd->runPDII();
-      PD::Tree pdTree = pd->translateTree(0);
-      rsmt = pdToTree(pdTree);
-      delete pd;
+    // check net alpha because FastRoute has a special implementation of flute
+    // TODO: move this flute implementation to SteinerTreeBuilder
+    const float net_alpha = stt_builder_->getAlpha(net->getDbNet());
+    if (net_alpha > 0.0) {
+      rsmt = stt_builder_->makeSteinerTree(
+          net->getDbNet(), net->getPinX(), net->getPinY(), net->getDriverIdx());
     } else {
+      float coeffV = 1.36;
+
       if (congestionDriven) {
         // call congestion driven flute to generate RSMT
+        bool cong;
+        coeffV = noADJ ? 1.2 : coeffADJ(netID);
+        cong = netCongestion(netID);
         if (cong) {
-          fluteCongest(i, d, x, y, FLUTEACCURACY, coeffV, &rsmt);
+          fluteCongest(netID,
+                       net->getPinX(),
+                       net->getPinY(),
+                       flute_accuracy,
+                       coeffV,
+                       rsmt);
         } else {
-          fluteNormal(i, d, x, y, FLUTEACCURACY, coeffV, &rsmt);
+          fluteNormal(netID,
+                      net->getPinX(),
+                      net->getPinY(),
+                      flute_accuracy,
+                      coeffV,
+                      rsmt);
         }
         if (d > 3) {
-          numShift += edgeShiftNew(&rsmt, i);
+          numShift += edgeShiftNew(rsmt, netID);
         }
       } else {
         // call FLUTE to generate RSMT for each net
-        fluteNormal(i, d, x, y, FLUTEACCURACY, coeffV, &rsmt);
+        if (noADJ || HTreeSuite(netID)) {
+          coeffV = 1.2;
+        }
+        fluteNormal(netID,
+                    net->getPinX(),
+                    net->getPinY(),
+                    flute_accuracy,
+                    coeffV,
+                    rsmt);
       }
+    }
+    if (debug_->isOn() && debug_->steinerTree
+        && net->getDbNet() == debug_->net) {
+      logger_->report("Steiner Tree 2D");
+      steinerTreeVisualization(rsmt, net);
     }
 
     if (genTree) {
-      copyStTree(i, rsmt);
+      copyStTree(netID, rsmt);
     }
 
-    if (nets[i]->deg != rsmt.deg) {
-      logger->warn(GRT, 190, "Net degree differs from rsmt degree.");
+    if (net->getNumPins() != rsmt.deg) {
       d = rsmt.deg;
     }
 
     if (congestionDriven) {
-      for (j = 0; j < 2 * d - 3; j++)
-        wl1 += sttrees[i].edges[j].len;
+      for (int j = 0; j < sttrees_[netID].num_edges(); j++) {
+        wl1 += sttrees_[netID].edges[j].len;
+      }
     }
 
-    segcnt = 0;
-    for (j = 0; j < 2 * d - 2; j++) {
-      x1 = rsmt.branch[j].x;
-      y1 = rsmt.branch[j].y;
-      n = rsmt.branch[j].n;
-      x2 = rsmt.branch[n].x;
-      y2 = rsmt.branch[n].y;
+    for (int j = 0; j < rsmt.branchCount(); j++) {
+      const int x1 = rsmt.branch[j].x;
+      const int y1 = rsmt.branch[j].y;
+      const int n = rsmt.branch[j].n;
+      const int x2 = rsmt.branch[n].x;
+      const int y2 = rsmt.branch[n].y;
 
-      wl += ADIFF(x1, x2) + ADIFF(y1, y2);
+      wl += abs(x1 - x2) + abs(y1 - y2);
 
-      if (x1 != x2 || y1 != y2)  // the branch is not degraded (a point)
-      {
-        segPos = seglistIndex[i]
-                 + segcnt;  // the position of this segment in seglist
+      if (x1 != x2 || y1 != y2) {  // the branch is not degraded (a point)
+        // the position of this segment in seglist
+        const int8_t cost = nets_[netID]->getEdgeCost();
         if (x1 < x2) {
-          seglist[segPos].x1 = x1;
-          seglist[segPos].x2 = x2;
-          seglist[segPos].y1 = y1;
-          seglist[segPos].y2 = y2;
+          seglist_[netID].emplace_back(netID, x1, y1, x2, y2, cost);
         } else {
-          seglist[segPos].x1 = x2;
-          seglist[segPos].x2 = x1;
-          seglist[segPos].y1 = y2;
-          seglist[segPos].y2 = y1;
+          seglist_[netID].emplace_back(netID, x2, y2, x1, y1, cost);
         }
-
-        seglist[segPos].netID = i;
-        segcnt++;
       }
     }  // loop j
 
-    seglistCnt[i] = segcnt;  // the number of segments for net i
-    totalNumSeg += segcnt;
+    totalNumSeg += seglist_[netID].size();
 
     if (reRoute) {
       // update the est_usage due to the segments in this net
       newrouteL(
-          i,
-          NOROUTE,
-          TRUE);  // route the net with no previous route for each tree edge
+          netID,
+          RouteType::NoRoute,
+          true);  // route the net with no previous route for each tree edge
     }
   }  // loop i
 
-  if (verbose > 1) {
-    logger->info(GRT, 191, "WIRELEN : {}, WIRELEN1 : {}", wl, wl1);
-    logger->info(GRT, 192, "NumSeg  : {}", totalNumSeg);
-    logger->info(GRT, 193, "NumShift: {}", numShift);
-  }
+  debugPrint(logger_,
+             GRT,
+             "rsmt",
+             1,
+             "Wirelength: {}, Wirelength1: {}\nNumber of segments: {}\nNumber "
+             "of shifts: {}",
+             wl,
+             wl1,
+             totalNumSeg,
+             numShift);
 }
 
 }  // namespace grt

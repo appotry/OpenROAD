@@ -1,364 +1,458 @@
-/////////////////////////////////////////////////////////////////////////////
-//
-// Copyright (c) 2020, OpenROAD
-// All rights reserved.
-//
-// BSD 3-Clause License
-//
-// Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions are met:
-//
-// * Redistributions of source code must retain the above copyright notice, this
-//   list of conditions and the following disclaimer.
-//
-// * Redistributions in binary form must reproduce the above copyright notice,
-//   this list of conditions and the following disclaimer in the documentation
-//   and/or other materials provided with the distribution.
-//
-// * Neither the name of the copyright holder nor the names of its
-//   contributors may be used to endorse or promote products derived from
-//   this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
-// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-// POSSIBILITY OF SUCH DAMAGE.
-//
-///////////////////////////////////////////////////////////////////////////////
+// SPDX-License-Identifier: BSD-3-Clause
+// Copyright (c) 2021-2025, The OpenROAD Authors
 
 #pragma once
 
-#include <QAbstractTableModel>
+#include <qchar.h>
 
+#include <QAbstractTableModel>
+#include <QCheckBox>
+#include <QColor>
+#include <QComboBox>
+#include <QDialog>
+#include <QFormLayout>
+#include <QHBoxLayout>
+#include <QHash>
+#include <QListWidget>
+#include <QPushButton>
+#include <QSpinBox>
+#include <QVariant>
+#include <QWidget>
+#include <map>
+#include <memory>
+#include <set>
+#include <string>
+#include <vector>
+
+#include "absl/synchronization/mutex.h"
+#include "dropdownCheckboxes.h"
 #include "gui/gui.h"
-#include "opendb/db.h"
-#include "opendb/dbBlockCallBackObj.h"
-#include "sta/PathExpanded.hh"
-#include "sta/PathRef.hh"
+#include "odb/db.h"
+#include "odb/dbBlockCallBackObj.h"
+#include "odb/dbObject.h"
+#include "sta/SdcClass.hh"
 #include "sta/Sta.hh"
-namespace odb {
-class dbBlock;
-class dbFill;
-class dbInst;
-class dbMaster;
-class dbNet;
-class dbITerm;
-class dbWire;
-class dbBTerm;
-class dbBPin;
-class dbBlockage;
-class dbObstruction;
-class dbRegion;
-class dbRow;
-class dbSWire;
-}  // namespace odb
-namespace ord {
-class OpenRoad;
-}
+#include "staGuiInterface.h"
+
 namespace sta {
-class Instance;
-class Net;
+class dbSta;
 class Pin;
+class Clock;
 }  // namespace sta
 namespace gui {
 class TimingPathsModel;
-class TimingPathNode;
-class TimingPath;
 class TimingPathDetailModel;
 class GuiDBChangeListener;
 
 class TimingPathsModel : public QAbstractTableModel
 {
+  Q_OBJECT
+
+ private:
+  enum Column
+  {
+    kClock,
+    kRequired,
+    kArrival,
+    kSlack,
+    kSkew,
+    kLogicDelay,
+    kLogicDepth,
+    kFanout,
+    kStart,
+    kEnd
+  };
+
  public:
-  TimingPathsModel(bool get_max = true, int path_count = 100);
-  ~TimingPathsModel();
+  static const std::map<Column, const char*>& getColumnNames()
+  {
+    static const std::map<Column, const char*> kColumnNames
+        = {{kClock, "Capture Clock"},
+           {kRequired, "Required"},
+           {kArrival, "Arrival"},
+           {kSlack, "Slack"},
+           {kSkew, "Skew"},
+           {kLogicDelay, "Logic Delay"},
+           {kLogicDepth, "Logic Depth"},
+           {kFanout, "Fanout"},
+           {kStart, "Start"},
+           {kEnd, "End"}};
+    return kColumnNames;
+  }
 
-  int rowCount(const QModelIndex& parent = QModelIndex()) const Q_DECL_OVERRIDE;
-  int columnCount(const QModelIndex& parent
-                  = QModelIndex()) const Q_DECL_OVERRIDE;
+  TimingPathsModel(bool is_setup,
+                   STAGuiInterface* sta,
+                   QObject* parent = nullptr);
 
-  QVariant data(const QModelIndex& index,
-                int role = Qt::DisplayRole) const Q_DECL_OVERRIDE;
+  int rowCount(const QModelIndex& parent) const Q_DECL_OVERRIDE;
+  int rowCount() const { return rowCount({}); }
+  int columnCount(const QModelIndex& parent) const Q_DECL_OVERRIDE;
+  int columnCount() const { return columnCount({}); }
+
+  QVariant data(const QModelIndex& index, int role) const Q_DECL_OVERRIDE;
   QVariant headerData(int section,
                       Qt::Orientation orientation,
-                      int role = Qt::DisplayRole) const Q_DECL_OVERRIDE;
+                      int role) const Q_DECL_OVERRIDE;
 
-  TimingPath* getPathAt(int index) const { return timing_paths_[index]; }
+  TimingPath* getPathAt(const QModelIndex& index) const;
 
   void resetModel();
+  void populateModel(const std::set<const sta::Pin*>& from,
+                     const std::vector<std::set<const sta::Pin*>>& thru,
+                     const std::set<const sta::Pin*>& to,
+                     const std::string& path_group_name,
+                     const sta::ClockSet* clks);
+
+ public slots:
   void sort(int col_index, Qt::SortOrder sort_order) override;
-  void populateModel(bool get_max = true, int path_count = 100);
 
  private:
-  bool populatePaths(bool get_max = true, int path_count = 100, bool clockExpanded = false);
+  bool populatePaths(const std::set<const sta::Pin*>& from,
+                     const std::vector<std::set<const sta::Pin*>>& thru,
+                     const std::set<const sta::Pin*>& to,
+                     const std::string& path_group_name,
+                     const sta::ClockSet* clks);
 
-  ord::OpenRoad* openroad_;
-  std::vector<TimingPath*> timing_paths_;
-
-  static const std::vector<std::string> _path_columns;
-  enum Column : int;
-};
-
-struct TimingPathNode
-{
-  TimingPathNode(odb::dbObject* pin,
-                 bool is_rising,
-                 float arrival,
-                 float required,
-                 float delay,
-                 float slack,
-                 float slew,
-                 float load)
-      : pin_(pin),
-        is_rising_(is_rising),
-        arrival_(arrival),
-        required_(required),
-        delay_(delay),
-        slack_(slack),
-        slew_(slew),
-        load_(load)
-  {
-  }
-
-  std::string getNodeName(bool include_master = false) const;
-  std::string getNetName() const;
-
-  odb::dbObject* pin_;
-  bool is_rising_;
-  float arrival_;
-  float required_;
-  float delay_;
-  float slack_;
-  float slew_;
-  float load_;
-};
-
-class TimingPath
-{
- public:
-  TimingPath(int path_index)
-      : path_nodes_(),
-        start_clk_(),
-        end_clk_(),
-        slack_(0),
-        path_delay_(0),
-        arr_time_(0),
-        req_time_(0),
-        path_index_(path_index)
-  {
-  }
-
-  void appendNode(const TimingPathNode& node) { path_nodes_.push_back(node); }
-  int levelsCount() const { return path_nodes_.size(); }
-  void setStartClock(const char* name) { start_clk_ = name; }
-  std::string getStartClock() const { return start_clk_; }
-  void setEndClock(const char* name) { end_clk_ = name; }
-  std::string getEndClock() const { return end_clk_; }
-
-  float getPathArrivalTime() const { return arr_time_; }
-  void setPathArrivalTime(float arr) { arr_time_ = arr; }
-  float getPathRequiredTime() const { return req_time_; }
-  void setPathRequiredTime(float req) { req_time_ = req; }
-  float getSlack() const { return slack_; }
-  void setSlack(float slack) { slack_ = slack; }
-  float getPathDelay() const { return path_delay_; }
-  void setPathDelay(float del) { path_delay_ = del; }
-
-  int getPathIndex() const { return path_index_; }
-
-  TimingPathNode getNodeAt(int index) const { return path_nodes_[index]; }
-
-  std::string getStartStageName() const;
-  std::string getEndStageName() const;
-
- private:
-  std::vector<TimingPathNode> path_nodes_;
-  std::string start_clk_;
-  std::string end_clk_;
-  float slack_;
-  float path_delay_;
-  float arr_time_;
-  float req_time_;
-  int path_index_;
+  STAGuiInterface* sta_;
+  bool is_setup_;
+  std::vector<std::unique_ptr<TimingPath>> timing_paths_;
 };
 
 class TimingPathDetailModel : public QAbstractTableModel
 {
+ private:
+  enum Column
+  {
+    kPin,
+    kFanout,
+    kRiseFall,
+    kTime,
+    kDelay,
+    kSlew,
+    kLoad
+  };
+
  public:
-  TimingPathDetailModel() {}
-  ~TimingPathDetailModel() {}
+  static const std::map<Column, const char*>& getColumnNames()
+  {
+    static const std::map<Column, const char*> kColumnNames
+        = {{kPin, "Pin"},
+           {kFanout, "Fanout"},
+           {kRiseFall, "RiseFall"},
+           {kTime, "Time"},
+           {kDelay, "Delay"},
+           {kSlew, "Slew"},
+           {kLoad, "Load"}};
+    return kColumnNames;
+  }
 
-  int rowCount(const QModelIndex& parent = QModelIndex()) const Q_DECL_OVERRIDE;
-  int columnCount(const QModelIndex& parent
-                  = QModelIndex()) const Q_DECL_OVERRIDE;
+  TimingPathDetailModel(bool is_capture,
+                        sta::dbSta* sta,
+                        QObject* parent = nullptr);
 
-  QVariant data(const QModelIndex& index,
-                int role = Qt::DisplayRole) const Q_DECL_OVERRIDE;
+  int rowCount(const QModelIndex& parent) const Q_DECL_OVERRIDE;
+  int rowCount() const { return rowCount({}); }
+  int columnCount(const QModelIndex& parent) const Q_DECL_OVERRIDE;
+
+  QVariant data(const QModelIndex& index, int role) const Q_DECL_OVERRIDE;
   QVariant headerData(int section,
                       Qt::Orientation orientation,
-                      int role = Qt::DisplayRole) const Q_DECL_OVERRIDE;
+                      int role) const Q_DECL_OVERRIDE;
+  Qt::ItemFlags flags(const QModelIndex& index) const Q_DECL_OVERRIDE;
 
-  void populateModel(TimingPath* path);
+  TimingPath* getPath() const { return path_; }
+  TimingNodeList* getNodes() const { return nodes_; }
+  bool hasNodes() const { return nodes_ != nullptr && !nodes_->empty(); }
+  int getClockEndIndex() const
+  {
+    return is_capture_ ? path_->getClkCaptureEndIndex()
+                       : path_->getClkPathEndIndex();
+  }
+
+  const TimingPathNode* getNodeAt(const QModelIndex& index) const;
+  void setExpandClock(bool state) { expand_clock_ = state; }
+  bool shouldHide(const QModelIndex& index) const;
+
+  bool isClockSummaryRow(const QModelIndex& index) const
+  {
+    return index.row() == kClockSummaryRow;
+  }
+
+  void populateModel(TimingPath* path, TimingNodeList* nodes);
 
  private:
+  sta::dbSta* sta_;
+  bool is_capture_;
+  bool expand_clock_;
+
   TimingPath* path_;
+  TimingNodeList* nodes_;
+
   // Unicode symbols
-  static const char* up_down_arrows;
-  static const char* up_arrow;
-  static const char* down_arrow;
-  static const std::vector<std::string> _path_details_columns;
-  enum Column : int;
+  static constexpr char kUpDownArrows[] = "⇅";
+  static constexpr char kUpArrow[] = "↑";
+  static constexpr char kDownArrow[] = "↓";
+  static constexpr int kClockSummaryRow = 1;
 };
 
-class TimingPathRenderer : public gui::Renderer
+class TimingPathRenderer : public web::Renderer
 {
  public:
   TimingPathRenderer();
-  ~TimingPathRenderer();
   void highlight(TimingPath* path);
 
-  void highlightNode(int node_id);
-  virtual void drawObjects(gui::Painter& /* painter */) override;
+  void highlightNode(const TimingPathNode* node);
+  void clearHighlightNodes();
+
+  void drawObjects(web::Painter& /* painter */) override;
+  const char* getDisplayControlGroupName() override { return "Timing Path"; }
 
   TimingPath* getPathToRender() { return path_; }
 
  private:
-  void highlightInst(odb::dbInst* inst,
-                     gui::Painter& painter,
-                     const gui::Painter::Color& color);
-  void highlightStage(gui::Painter& painter);
-  void highlightTerm(odb::dbBTerm* term, gui::Painter& painter);
-  void highlightNet(odb::dbNet* net,
-                    odb::dbObject* source_node,
-                    odb::dbObject* sink_node,
-                    gui::Painter& painter);
+  void highlightStage(web::Painter& painter,
+                      const web::Descriptor* net_descriptor,
+                      const web::Descriptor* inst_descriptor);
+
+  void drawNodesList(TimingNodeList* nodes,
+                     web::Painter& painter,
+                     const web::Descriptor* net_descriptor,
+                     const web::Descriptor* inst_descriptor,
+                     const web::Descriptor* bterm_descriptor,
+                     const web::Painter::Color& clock_color,
+                     bool draw_clock,
+                     bool draw_signal);
 
   // Expanded path is owned by PathRenderer.
   TimingPath* path_;
 
-  int highlight_node_;
+  struct HighlightStage
+  {
+    odb::dbNet* net;
+    odb::dbInst* inst;
+    odb::dbObject* sink;
+  };
+  std::vector<std::unique_ptr<HighlightStage>> highlight_stage_;
+  absl::Mutex rendering_;
 
-  static gui::Painter::Color inst_highlight_color_;
-  static gui::Painter::Color path_inst_color_;
-  static gui::Painter::Color term_color_;
-  static gui::Painter::Color signal_color_;
-  static gui::Painter::Color clock_color_;
+  static const web::Painter::Color kInstHighlightColor;
+  static const web::Painter::Color kPathInstColor;
+  static const web::Painter::Color kTermColor;
+  static const web::Painter::Color kSignalColor;
+  static const web::Painter::Color kClockColor;
+  static const web::Painter::Color kCaptureClockColor;
+
+  static constexpr const char* kDataPathLabel = "Data path";
+  static constexpr const char* kLaunchClockLabel = "Launch clock";
+  static constexpr const char* kCaptureClockLabel = "Capture clock";
+  static constexpr const char* kLegendLabel = "Legend";
+};
+
+class TimingConeRenderer : public web::Renderer
+{
+ public:
+  TimingConeRenderer();
+  void setSTA(sta::dbSta* sta) { sta_ = sta; }
+  void setITerm(odb::dbITerm* term, bool fanin, bool fanout);
+  void setBTerm(odb::dbBTerm* term, bool fanin, bool fanout);
+  void setPin(const sta::Pin* pin, bool fanin, bool fanout);
+
+  void drawObjects(web::Painter& painter) override;
+
+ private:
+  sta::dbSta* sta_;
+  const sta::Pin* term_;
+  bool fanin_;
+  bool fanout_;
+  ConeDepthMap map_;
+  float min_timing_;
+  float max_timing_;
+  web::SpectrumGenerator color_generator_;
+
+  bool isSupplyPin(const sta::Pin* pin) const;
 };
 
 class GuiDBChangeListener : public QObject, public odb::dbBlockCallBackObj
 {
   Q_OBJECT
  public:
-  GuiDBChangeListener() : isDirty_(false) {}
+  GuiDBChangeListener(QObject* parent = nullptr) : QObject(parent) {}
 
-  void inDbInstCreate(odb::dbInst* inst) override
+  void inDbInstCreate(odb::dbInst* /* inst */) override { callback(); }
+  void inDbInstDestroy(odb::dbInst* /* inst */) override { callback(); }
+  void inDbInstSwapMasterBefore(odb::dbInst* /* inst */,
+                                odb::dbMaster* /* master */) override
   {
-    callback("inDbInstCreate", inst);
+    callback();
   }
-  void inDbInstDestroy(odb::dbInst* inst) override
+  void inDbInstSwapMasterAfter(odb::dbInst* /* inst */) override { callback(); }
+  void inDbNetCreate(odb::dbNet* /* net */) override { callback(); }
+  void inDbNetDestroy(odb::dbNet* /* net */) override { callback(); }
+  void inDbITermPostConnect(odb::dbITerm* /* iterm */) override { callback(); }
+  void inDbITermPreDisconnect(odb::dbITerm* /* iterm */) override
   {
-    callback("inDbInstDestroy", inst);
+    callback();
   }
-  void inDbInstSwapMasterBefore(odb::dbInst* inst,
-                                odb::dbMaster* master) override
+  void inDbITermDestroy(odb::dbITerm* /* iterm */) override { callback(); }
+  void inDbBTermPostConnect(odb::dbBTerm* /* bterm */) override { callback(); }
+  void inDbBTermPreDisconnect(odb::dbBTerm* /* bterm */) override
   {
-    callback("inDbInstSwapMasterBefore", inst, master);
+    callback();
   }
-  void inDbInstSwapMasterAfter(odb::dbInst* inst) override
-  {
-    callback("inDbInstSwapMasterAfter", inst);
-  }
-  void inDbNetCreate(odb::dbNet* net) override
-  {
-    callback("inDbNetCreate", net);
-  }
-  void inDbNetDestroy(odb::dbNet* net) override
-  {
-    callback("inDbNetDestroy", net);
-  }
-  void inDbITermPostConnect(odb::dbITerm* iterm) override
-  {
-    callback("inDbITermPostConnect", iterm);
-  }
-  void inDbITermPreDisconnect(odb::dbITerm* iterm) override
-  {
-    callback("inDbITermPreDisconnect", iterm);
-  }
-  void inDbITermDestroy(odb::dbITerm* iterm) override
-  {
-    callback("inDbITermDestroy", iterm);
-  }
-  void inDbBTermPostConnect(odb::dbBTerm* bterm) override
-  {
-    callback("inDbBTermPostConnect", bterm);
-  }
-  void inDbBTermPreDisconnect(odb::dbBTerm* bterm) override
-  {
-    callback("inDbBTermPreDisconnect", bterm);
-  }
-  void inDbBTermDestroy(odb::dbBTerm* bterm) override
-  {
-    callback("inDbBTermDestroy", bterm);
-  }
-  void inDbWireCreate(odb::dbWire* wire) override
-  {
-    callback("inDbWireCreate", wire);
-  }
-  void inDbWireDestroy(odb::dbWire* wire) override
-  {
-    callback("inDbWireDestroy", wire);
-  }
-  void inDbBlockageCreate(odb::dbBlockage* blockage) override
-  {
-    callback("inDbBlockageCreate", blockage);
-  }
-  void inDbObstructionCreate(odb::dbObstruction* obstr) override
-  {
-    callback("inDbObstructionCreate", obstr);
-  }
-  void inDbObstructionDestroy(odb::dbObstruction* obstr) override
-  {
-    callback("inDbObstructionDestroy", obstr);
-  }
-  void inDbBlockStreamOutAfter(odb::dbBlock* block) override
-  {
-    callback("inDbBlockStreamOutAfter", block);
-  }
-  void inDbFillCreate(odb::dbFill* fill) override
-  {
-    callback("inDbFillCreate", fill);
-  }
+  void inDbBTermDestroy(odb::dbBTerm* /* bterm */) override { callback(); }
+  void inDbWireCreate(odb::dbWire* /* wire */) override { callback(); }
+  void inDbWireDestroy(odb::dbWire* /* wire */) override { callback(); }
+  void inDbFillCreate(odb::dbFill* /* fill */) override { callback(); }
 
  signals:
-  void dbUpdated(const QString& update_type,
-                 const std::vector<odb::dbObject*>& update_objects);
+  void dbUpdated();
+
  public slots:
   void reset()
   {
-    isDirty_ = false;
+    is_modified_ = false;
     // call reset after gui refresh
   }
 
  private:
-  void callback(QString update_type,
-                odb::dbObject* obj1 = nullptr,
-                odb::dbObject* obj2 = nullptr)
+  void callback()
   {
-    if (isDirty_ == false) {
-      // send signal if dirty was false
-      std::vector<odb::dbObject*> objects{obj1, obj2};
-      emit dbUpdated(update_type, objects);
-      isDirty_ = true;
+    if (!is_modified_) {
+      emit dbUpdated();
+      is_modified_ = true;
     }
   }
-  bool isDirty_;
+
+  bool is_modified_{false};
+};
+
+class PinSetWidget : public QWidget
+{
+  Q_OBJECT
+ public:
+  PinSetWidget(bool add_remove_button, QWidget* parent = nullptr);
+
+  void setSTA(sta::dbSta* sta) { sta_ = sta; }
+
+  void updatePins();
+
+  void setPins(const std::set<const sta::Pin*>& pins);
+
+  std::set<const sta::Pin*> getPins() const;
+
+  bool isAddMode() const { return add_mode_; }
+  bool isRemoveMode() const { return !isAddMode(); }
+  void setAddMode();
+  void setRemoveMode();
+
+ signals:
+  void addRemoveTriggered(PinSetWidget*);
+  void inspect(const web::Selected& selected);
+
+ public slots:
+  void clearPins() { setPins({}); }
+
+ protected:
+  void keyPressEvent(QKeyEvent* event) override;
+
+ private slots:
+  void findPin();
+  void showMenu(const QPoint& point);
+
+ private:
+  sta::dbSta* sta_;
+  std::vector<const sta::Pin*> pins_;
+
+  QListWidget* box_;
+  QLineEdit* find_pin_;
+  QPushButton* clear_;
+  QPushButton* add_remove_;
+
+  bool add_mode_;
+
+  void addPin(const sta::Pin* pin);
+  void removePin(const sta::Pin* pin);
+  void removeSelectedPins();
+};
+
+class TimingControlsDialog : public QDialog
+{
+  Q_OBJECT
+ public:
+  TimingControlsDialog(QWidget* parent = nullptr);
+
+  void setSTA(sta::dbSta* sta);
+  STAGuiInterface* getSTA() const { return sta_.get(); }
+
+  void setPathCount(int path_count);
+  int getPathCount() const { return sta_->getMaxPathCount(); }
+
+  void setUnconstrained(bool uncontrained);
+  bool getUnconstrained() const { return sta_->isIncludeUnconstrainedPaths(); }
+
+  void setClkGatingChecks(bool value);
+  bool getClkGatingChecks() const { return sta_->isIncludeClkGatingChecks(); }
+
+  void setOnePathPerEndpoint(bool value);
+  bool getOnePathPerEndpoint() const { return sta_->isOnePathPerEndpoint(); }
+
+  void setExpandClock(bool expand);
+  bool getExpandClock() const;
+
+  void setFromPin(const std::set<const sta::Pin*>& pins)
+  {
+    from_->setPins(pins);
+  }
+  void setThruPin(const std::vector<std::set<const sta::Pin*>>& pins);
+  void setToPin(const std::set<const sta::Pin*>& pins) { to_->setPins(pins); }
+
+  std::set<const sta::Pin*> getFromPins() const { return from_->getPins(); }
+  std::vector<std::set<const sta::Pin*>> getThruPins() const;
+  std::set<const sta::Pin*> getToPins() const { return to_->getPins(); }
+  const sta::ClockSet* getClocks();
+
+  const sta::Pin* convertTerm(web::Gui::Term term) const;
+
+  sta::Scene* getScene() const { return sta_->getScene(); }
+  void setScene(sta::Scene* scene) { sta_->setScene(scene); }
+
+ signals:
+  void inspect(const web::Selected& selected);
+  void expandClock(bool expand);
+
+ public slots:
+  void populate();
+
+ private slots:
+  void addRemoveThru(PinSetWidget* row);
+
+ private:
+  std::unique_ptr<STAGuiInterface> sta_;
+
+  QFormLayout* layout_;
+
+  QSpinBox* path_count_spin_box_;
+  QComboBox* scene_box_;
+  DropdownCheckboxes* clock_box_;
+
+  QCheckBox* unconstrained_;
+  QCheckBox* clk_gating_checks_;
+  QCheckBox* one_path_per_endpoint_;
+  QCheckBox* expand_clk_;
+
+  PinSetWidget* from_;
+  std::vector<PinSetWidget*> thru_;
+  PinSetWidget* to_;
+  QHash<QString, sta::Clock*> qstring_to_clk_;
+
+  sta::ClockSet selected_clocks_;
+
+  static constexpr int kThruStartRow = 4;
+
+  void setPinSelections();
+
+  void addThruRow(const std::set<const sta::Pin*>& pins);
+  void setupPinRow(const QString& label, PinSetWidget* row, int row_index = -1);
 };
 
 }  // namespace gui

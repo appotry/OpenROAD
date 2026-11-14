@@ -1,107 +1,16 @@
-[INFO ODB-0222] Reading LEF file: sky130hs/sky130hs.tlef
-[INFO ODB-0223]     Created 13 technology layers
-[INFO ODB-0224]     Created 25 technology vias
-[INFO ODB-0226] Finished LEF file:  sky130hs/sky130hs.tlef
-[INFO ODB-0222] Reading LEF file: sky130hs/sky130hs_std_cell.lef
-[INFO ODB-0225]     Created 390 library cells
-[INFO ODB-0226] Finished LEF file:  sky130hs/sky130hs_std_cell.lef
-[INFO ODB-0127] Reading DEF file: gcd_sky130.def
+[INFO ODB-0227] LEF file: sky130hs/sky130hs.tlef, created 13 layers, 25 vias
+[INFO ODB-0227] LEF file: sky130hs/sky130hs_std_cell.lef, created 390 library cells
 [INFO ODB-0128] Design: gcd
 [INFO ODB-0130]     Created 54 pins.
 [INFO ODB-0131]     Created 1360 components and 6650 component-terminals.
 [INFO ODB-0132]     Created 2 special nets and 0 connections.
 [INFO ODB-0133]     Created 411 nets and 1210 connections.
-[INFO ODB-0134] Finished DEF file: gcd_sky130.def
-Min routing layer: met1
-Max routing layer: met5
-Global adjustment: 0%
-Grid origin: (0, 0)
-[INFO GRT-0003] Macros: 0
-[INFO GRT-0004] Blockages: 16951
-[INFO GRT-0017] Found 0 clock nets.
-[INFO GRT-0001] Minimum degree: 2
-[INFO GRT-0002] Maximum degree: 22
-[INFO GRT-0018] Processing 13509 blockages on layer li1.
-[INFO GRT-0019] Processing 3926 blockages on layer met1.
-[INFO GRT-0022] Processing 10 blockages on layer met4.
-[INFO GRT-0022] Reducing resources of layer met2 by 15%.
-[INFO GRT-0023] Reducing resources of layer met3 by 15%.
-[INFO GRT-0024] Reducing resources of layer met4 by 15%.
-[INFO GRT-0025] Reducing resources of layer met5 by 15%.
-[INFO GRT-0146] Final usage/overflow report:
-[INFO GRT-0155] Overflow Report:
-[INFO GRT-0156] Total Usage   : 2931
-[INFO GRT-0157] Total Capacity: 70127
-[INFO GRT-0158] Max H Overflow: 0
-[INFO GRT-0159] Max V Overflow: 0
-[INFO GRT-0160] Max Overflow  : 0
-[INFO GRT-0161] H   Overflow  : 0
-[INFO GRT-0162] V   Overflow  : 0
-[INFO GRT-0163] Final Overflow: 0
-
-[INFO GRT-0110] Final usage: 2931
-[INFO GRT-0111] Final number of vias: 2038
-[INFO GRT-0112] Final usage 3D: 9045
-[INFO GRT-0018] Total wirelength: 30204 um
-[WARNING GRT-0043] No OR_DEFAULT vias defined.
-Notice 0: Split top of 1 T shapes.
-Notice 0: Split top of 1 T shapes.
-Notice 0: Split top of 1 T shapes.
-Notice 0: Split top of 1 T shapes.
-Notice 0: Split top of 1 T shapes.
-Notice 0: Split top of 1 T shapes.
-Notice 0: Split top of 1 T shapes.
-Notice 0: Split top of 1 T shapes.
-Notice 0: Split top of 1 T shapes.
-Notice 0: Split top of 1 T shapes.
-Notice 0: Split top of 1 T shapes.
-Notice 0: Split top of 1 T shapes.
-Notice 0: Split top of 1 T shapes.
-Notice 0: Split top of 1 T shapes.
-Notice 0: Split top of 1 T shapes.
-Notice 0: Split top of 1 T shapes.
-Notice 0: Split top of 1 T shapes.
-Notice 0: Split top of 1 T shapes.
-Notice 0: Split top of 1 T shapes.
-Notice 0: Split top of 1 T shapes.
-Notice 0: Split top of 1 T shapes.
-Notice 0: Split top of 1 T shapes.
-Notice 0: Split top of 1 T shapes.
-Notice 0: Split top of 1 T shapes.
-Notice 0: Split top of 1 T shapes.
-[INFO GRT-0012] #Antenna violations: 2
-[INFO GRT-0015] 2 diodes inserted.
-Min routing layer: met1
-Max routing layer: met5
-Global adjustment: 0%
-Grid origin: (0, 0)
-[INFO GRT-0003] Macros: 0
-[INFO GRT-0004] Blockages: 16963
-[INFO GRT-0001] Minimum degree: 2
-[INFO GRT-0002] Maximum degree: 17
-[INFO GRT-0018] Processing 13515 blockages on layer li1.
-[INFO GRT-0019] Processing 3934 blockages on layer met1.
-[INFO GRT-0022] Processing 10 blockages on layer met4.
-[INFO GRT-0022] Reducing resources of layer met2 by 15%.
-[INFO GRT-0023] Reducing resources of layer met3 by 15%.
-[INFO GRT-0024] Reducing resources of layer met4 by 15%.
-[INFO GRT-0025] Reducing resources of layer met5 by 15%.
-[INFO GRT-0009] Nets to reroute: 7.
-[INFO GRT-0146] Final usage/overflow report:
-[INFO GRT-0155] Overflow Report:
-[INFO GRT-0156] Total Usage   : 155
-[INFO GRT-0157] Total Capacity: 67374
-[INFO GRT-0158] Max H Overflow: 0
-[INFO GRT-0159] Max V Overflow: 0
-[INFO GRT-0160] Max Overflow  : 0
-[INFO GRT-0161] H   Overflow  : 0
-[INFO GRT-0162] V   Overflow  : 0
-[INFO GRT-0163] Final Overflow: 0
-
-[INFO GRT-0110] Final usage: 155
-[INFO GRT-0111] Final number of vias: 67
-[INFO GRT-0112] Final usage 3D: 356
-[WARNING GRT-0211] dbGcellGrid already exists in db. Clearing existing dbGCellGrid
-[INFO GRT-0014] Num routed nets: 411
+[INFO ANT-0002] Found 11 net violations.
+[INFO ANT-0001] Found 11 pin violations.
+[INFO GRT-0012] Found 11 antenna violations.
+[INFO GRT-0302] Inserted 11 jumpers for 11 nets.
+[INFO GRT-0012] Found 0 antenna violations.
+[INFO ANT-0002] Found 0 net violations.
+[INFO ANT-0001] Found 0 pin violations.
 No differences found.
 No differences found.

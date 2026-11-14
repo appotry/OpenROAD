@@ -1,86 +1,36 @@
-/////////////////////////////////////////////////////////////////////////////
-//
-// BSD 3-Clause License
-//
-// Copyright (c) 2019, University of California, San Diego.
-// All rights reserved.
-//
-// Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions are met:
-//
-// * Redistributions of source code must retain the above copyright notice, this
-//   list of conditions and the following disclaimer.
-//
-// * Redistributions in binary form must reproduce the above copyright notice,
-//   this list of conditions and the following disclaimer in the documentation
-//   and/or other materials provided with the distribution.
-//
-// * Neither the name of the copyright holder nor the names of its
-//   contributors may be used to endorse or promote products derived from
-//   this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
-// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-// POSSIBILITY OF SUCH DAMAGE.
-//
-///////////////////////////////////////////////////////////////////////////////
+// SPDX-License-Identifier: BSD-3-Clause
+// Copyright (c) 2019-2025, The OpenROAD Authors
 
 #include "Grid.h"
 
-#include <complex>
+#include <cmath>
+
+#include "odb/dbTypes.h"
+#include "odb/geom.h"
 
 namespace grt {
 
-void Grid::init(const long lowerLeftX,
-                const long lowerLeftY,
-                const long upperRightX,
-                const long upperRightY,
-                const long tileWidth,
-                const long tileHeight,
-                const int xGrids,
-                const int yGrids,
-                const bool perfectRegularX,
-                const bool perfectRegularY,
-                const int numLayers,
-                const std::vector<int>& spacings,
-                const std::vector<int>& minWidths,
-                const std::vector<int>& horizontalCapacities,
-                const std::vector<int>& verticalCapacities,
-                const std::map<int, std::vector<odb::Rect>>& obstructions)
+void Grid::init(const odb::Rect& die_area,
+                const int tile_size,
+                const int x_grids,
+                const int y_grids,
+                const bool perfect_regular_x,
+                const bool perfect_regular_y,
+                const int num_layers)
 {
-  _lowerLeftX = lowerLeftX;
-  _lowerLeftY = lowerLeftY;
-  _upperRightX = upperRightX;
-  _upperRightY = upperRightY;
-  _tileWidth = tileWidth;
-  _tileHeight = tileHeight;
-  _xGrids = xGrids;
-  _yGrids = yGrids;
-  _perfectRegularX = perfectRegularX;
-  _perfectRegularY = perfectRegularY;
-  _numLayers = numLayers;
-  _spacings = spacings;
-  _minWidths = minWidths;
-  _horizontalEdgesCapacities = horizontalCapacities;
-  _verticalEdgesCapacities = verticalCapacities;
-  _obstructions = obstructions;
+  die_area_ = die_area;
+  tile_size_ = tile_size;
+  x_grids_ = x_grids;
+  y_grids_ = y_grids;
+  perfect_regular_x_ = perfect_regular_x;
+  perfect_regular_y_ = perfect_regular_y;
+  num_layers_ = num_layers;
+  track_pitches_.resize(num_layers);
 }
 
 void Grid::clear()
 {
-  _spacings.clear();
-  _minWidths.clear();
-  _horizontalEdgesCapacities.clear();
-  _verticalEdgesCapacities.clear();
-  _obstructions.clear();
+  track_pitches_.clear();
 }
 
 odb::Point Grid::getPositionOnGrid(const odb::Point& position)
@@ -89,93 +39,138 @@ odb::Point Grid::getPositionOnGrid(const odb::Point& position)
   int y = position.y();
 
   // Computing x and y center:
-  int gCellId_X = floor((float) ((x - _lowerLeftX) / _tileWidth));
-  int gCellId_Y = floor((float) ((y - _lowerLeftY) / _tileHeight));
+  int gcell_id_x = (x - die_area_.xMin()) / tile_size_;
+  int gcell_id_y = (y - die_area_.yMin()) / tile_size_;
 
-  if (gCellId_X >= _xGrids)
-    gCellId_X--;
+  if (gcell_id_x >= x_grids_) {
+    gcell_id_x--;
+  }
 
-  if (gCellId_Y >= _yGrids)
-    gCellId_Y--;
+  if (gcell_id_y >= y_grids_) {
+    gcell_id_y--;
+  }
 
-  int centerX = (gCellId_X * _tileWidth) + (_tileWidth / 2) + _lowerLeftX;
-  int centerY = (gCellId_Y * _tileHeight) + (_tileHeight / 2) + _lowerLeftY;
+  int center_x
+      = (gcell_id_x * tile_size_) + (tile_size_ / 2) + die_area_.xMin();
+  int center_y
+      = (gcell_id_y * tile_size_) + (tile_size_ / 2) + die_area_.yMin();
 
-  return odb::Point(centerX, centerY);
+  return odb::Point(center_x, center_y);
 }
 
-std::pair<Grid::TILE, Grid::TILE> Grid::getBlockedTiles(
-    const odb::Rect& obstruction,
-    odb::Rect& firstTileBds,
-    odb::Rect& lastTileBds)
+void Grid::getBlockedTiles(const odb::Rect& obstruction,
+                           odb::Rect& first_tile_bds,
+                           odb::Rect& last_tile_bds,
+                           odb::Point& first_tile,
+                           odb::Point& last_tile)
 {
-  std::pair<TILE, TILE> tiles;
-  TILE firstTile;
-  TILE lastTile;
-
   odb::Point lower = obstruction.ll();  // lower bound of obstruction
   odb::Point upper = obstruction.ur();  // upper bound of obstruction
 
-  lower = getPositionOnGrid(lower);  // translate lower bound of obstruction to the
-                                     // center of the tile where it is inside
-  upper = getPositionOnGrid(upper);  // translate upper bound of obstruction to the
-                                     // center of the tile where it is inside
+  lower
+      = getPositionOnGrid(lower);  // translate lower bound of obstruction to
+                                   // the center of the tile where it is inside
+  upper
+      = getPositionOnGrid(upper);  // translate upper bound of obstruction to
+                                   // the center of the tile where it is inside
 
   // Get x and y indices of first blocked tile
-  firstTile._x = (lower.x() - (getTileWidth() / 2)) / getTileWidth();
-  firstTile._y = (lower.y() - (getTileHeight() / 2)) / getTileHeight();
+  first_tile = {(lower.x() - getXMin()) / getTileSize(),
+                (lower.y() - getYMin()) / getTileSize()};
 
   // Get x and y indices of last blocked tile
-  lastTile._x = (upper.x() - (getTileWidth() / 2)) / getTileWidth();
-  lastTile._y = (upper.y() - (getTileHeight() / 2)) / getTileHeight();
+  last_tile = {(upper.x() - getXMin()) / getTileSize(),
+               (upper.y() - getYMin()) / getTileSize()};
 
-  tiles = std::make_pair(firstTile, lastTile);
+  odb::Point ll_first_tile = odb::Point(lower.x() - (getTileSize() / 2),
+                                        lower.y() - (getTileSize() / 2));
+  odb::Point ur_first_tile = odb::Point(lower.x() + (getTileSize() / 2),
+                                        lower.y() + (getTileSize() / 2));
 
-  odb::Point llFirstTile = odb::Point(lower.x() - (getTileWidth() / 2),
-                                      lower.y() - (getTileHeight() / 2));
-  odb::Point urFirstTile = odb::Point(lower.x() + (getTileWidth() / 2),
-                                      lower.y() + (getTileHeight() / 2));
+  odb::Point ll_last_tile = odb::Point(upper.x() - (getTileSize() / 2),
+                                       upper.y() - (getTileSize() / 2));
+  odb::Point ur_last_tile = odb::Point(upper.x() + (getTileSize() / 2),
+                                       upper.y() + (getTileSize() / 2));
 
-  odb::Point llLastTile = odb::Point(upper.x() - (getTileWidth() / 2),
-                                     upper.y() - (getTileHeight() / 2));
-  odb::Point urLastTile = odb::Point(upper.x() + (getTileWidth() / 2),
-                                     upper.y() + (getTileHeight() / 2));
-
-  if ((_upperRightX - urLastTile.x()) / getTileWidth() < 1) {
-    urLastTile.setX(_upperRightX);
+  if ((die_area_.xMax() - ur_last_tile.x()) / getTileSize() < 1) {
+    ur_last_tile.setX(die_area_.xMax());
   }
-  if ((_upperRightY - urLastTile.y()) / getTileHeight() < 1) {
-    urLastTile.setY(_upperRightY);
+  if ((die_area_.yMax() - ur_last_tile.y()) / getTileSize() < 1) {
+    ur_last_tile.setY(die_area_.yMax());
   }
 
-  firstTileBds = odb::Rect(llFirstTile, urFirstTile);
-  lastTileBds = odb::Rect(llLastTile, urLastTile);
+  first_tile_bds = odb::Rect(ll_first_tile, ur_first_tile);
+  last_tile_bds = odb::Rect(ll_last_tile, ur_last_tile);
+}
 
-  return tiles;
+interval<int>::type Grid::computeTileReduceInterval(
+    const odb::Rect& obs,
+    const odb::Rect& tile,
+    int track_space,
+    bool first,
+    const odb::dbTechLayerDir& direction,
+    const int layer_cap,
+    const bool is_macro)
+{
+  int start_point, end_point;
+  if (direction == odb::dbTechLayerDir::VERTICAL) {
+    if (obs.xMin() >= tile.xMin() && obs.xMax() <= tile.xMax()) {
+      start_point = obs.xMin();
+      end_point = obs.xMax();
+    } else if (first) {
+      start_point = obs.xMin();
+      end_point = tile.xMax();
+    } else {
+      start_point = tile.xMin();
+      end_point = obs.xMax();
+    }
+  } else {
+    if (obs.yMin() >= tile.yMin() && obs.yMax() <= tile.yMax()) {
+      start_point = obs.yMin();
+      end_point = obs.yMax();
+    } else if (first) {
+      start_point = obs.yMin();
+      end_point = tile.yMax();
+    } else {
+      start_point = tile.yMin();
+      end_point = obs.yMax();
+    }
+  }
+  int interval_length = std::abs(end_point - start_point);
+  if (is_macro) {
+    int blocked_tracks
+        = std::ceil(static_cast<float>(interval_length) / track_space);
+    const int resources_left = layer_cap - blocked_tracks;
+    if (resources_left == 1) {
+      end_point += track_space;
+    }
+  }
+  interval<int>::type reduce_interval(start_point, end_point);
+  return reduce_interval;
 }
 
 int Grid::computeTileReduce(const odb::Rect& obs,
                             const odb::Rect& tile,
-                            int trackSpace,
+                            double track_space,
                             bool first,
-                            bool direction)
+                            odb::dbTechLayerDir direction)
 {
   int reduce = -1;
-  if (direction == RoutingLayer::VERTICAL) {
+  if (direction == odb::dbTechLayerDir::VERTICAL) {
     if (obs.xMin() >= tile.xMin() && obs.xMax() <= tile.xMax()) {
-      reduce = ceil(std::abs(obs.xMax() - obs.xMin()) / trackSpace);
+      reduce = ceil(std::abs(obs.xMax() - obs.xMin()) / track_space);
     } else if (first) {
-      reduce = ceil(std::abs(tile.xMax() - obs.xMin()) / trackSpace);
+      reduce = ceil(std::abs(tile.xMax() - obs.xMin()) / track_space);
     } else {
-      reduce = ceil(std::abs(obs.xMax() - tile.xMin()) / trackSpace);
+      reduce = ceil(std::abs(obs.xMax() - tile.xMin()) / track_space);
     }
   } else {
     if (obs.yMin() >= tile.yMin() && obs.yMax() <= tile.yMax()) {
-      reduce = ceil(std::abs(obs.yMax() - obs.yMin()) / trackSpace);
+      reduce = ceil(std::abs(obs.yMax() - obs.yMin()) / track_space);
     } else if (first) {
-      reduce = ceil(std::abs(tile.yMax() - obs.yMin()) / trackSpace);
+      reduce = ceil(std::abs(tile.yMax() - obs.yMin()) / track_space);
     } else {
-      reduce = ceil(std::abs(obs.yMax() - tile.yMin()) / trackSpace);
+      reduce = ceil(std::abs(obs.yMax() - tile.yMin()) / track_space);
     }
   }
 
@@ -184,13 +179,20 @@ int Grid::computeTileReduce(const odb::Rect& obs,
 
 odb::Point Grid::getMiddle()
 {
-  return odb::Point((_lowerLeftX + (_upperRightX - _lowerLeftX) / 2.0),
-                    (_lowerLeftY + (_upperRightY - _lowerLeftY) / 2.0));
+  return odb::Point((die_area_.xMin() + (die_area_.dx() / 2.0)),
+                    (die_area_.yMin() + (die_area_.dy() / 2.0)));
 }
 
-odb::Rect Grid::getGridArea() const
+const odb::Rect& Grid::getGridArea() const
 {
-  return odb::Rect(_lowerLeftX, _lowerLeftY, _upperRightX, _upperRightY);
+  return die_area_;
+}
+
+odb::Point Grid::getPositionFromGridPoint(const int x, const int y)
+{
+  int x_loc = (tile_size_ * (x + 0.5)) + getXMin();
+  int y_loc = (tile_size_ * (y + 0.5)) + getYMin();
+  return odb::Point(x_loc, y_loc);
 }
 
 }  // namespace grt

@@ -1,231 +1,110 @@
-// BSD 3-Clause License
-//
-// Copyright (c) 2020, MICL, DD-Lab, University of Michigan
-// All rights reserved.
-//
-// Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions are met:
-//
-// * Redistributions of source code must retain the above copyright notice, this
-//   list of conditions and the following disclaimer.
-//
-// * Redistributions in binary form must reproduce the above copyright notice,
-//   this list of conditions and the following disclaimer in the documentation
-//   and/or other materials provided with the distribution.
-//
-// * Neither the name of the copyright holder nor the names of its
-//   contributors may be used to endorse or promote products derived from
-//   this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
-// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-// POSSIBILITY OF SUCH DAMAGE.
+// SPDX-License-Identifier: BSD-3-Clause
+// Copyright (c) 2020-2025, The OpenROAD Authors
 
 #pragma once
 
-#include <tcl.h>
+#include <memory>
+#include <optional>
+#include <vector>
 
-#include <map>
+#include "odb/db.h"
 
-#include "opendb/db.h"
-#include "opendb/dbWireGraph.h"
-#include "utl/Logger.h"
+namespace utl {
+class Logger;
+}
 
 namespace ant {
 
-using odb::dbInst;
-using odb::dbITerm;
-using odb::dbNet;
-using odb::dbSWire;
-using odb::dbTechLayer;
-using odb::dbWire;
-using odb::dbWireGraph;
-
-using utl::Logger;
-
-typedef std::pair<dbWireGraph::Node*, std::vector<dbWireGraph::Node*>>
-    wireroots_info_vec;
-
-struct PARinfo
-{
-  // std::pair<odb::dbWireGraph::Node*, std::vector<odb::dbWireGraph::Node*>>
-  // WirerootNode;
-  odb::dbWireGraph::Node* WirerootNode;
-  std::set<odb::dbITerm*> iterms;
-  double wire_area;
-  double side_wire_area;
-  double iterm_areas[2];
-  double PAR_value;
-  double PSR_value;
-  double diff_PAR_value;
-  double diff_PSR_value;
-};
-
-struct ARinfo
-{
-  odb::dbWireGraph::Node* WirerootNode;
-  odb::dbWireGraph::Node* GateNode;
-  bool violated_net;
-  double PAR_value;
-  double PSR_value;
-  double diff_PAR_value;
-  double diff_PSR_value;
-  double CAR_value;
-  double CSR_value;
-  double diff_CAR_value;
-  double diff_CSR_value;
-  double diff_area;
-};
-
-struct ANTENNAmodel
-{
-  odb::dbTechLayer* layer;
-
-  double metal_factor;
-  double diff_metal_factor;
-
-  double cut_factor;
-  double diff_cut_factor;
-
-  double side_metal_factor;
-  double diff_side_metal_factor;
-
-  double minus_diff_factor;
-  double plus_diff_factor;
-  double diff_metal_reduce_factor;
-
-  ANTENNAmodel& operator=(const ANTENNAmodel& am)
-  {
-    metal_factor = am.metal_factor;
-    diff_metal_factor = am.diff_metal_factor;
-    cut_factor = am.cut_factor;
-    diff_cut_factor = am.diff_cut_factor;
-    side_metal_factor = am.side_metal_factor;
-    diff_side_metal_factor = am.diff_side_metal_factor;
-    minus_diff_factor = am.minus_diff_factor;
-    plus_diff_factor = am.plus_diff_factor;
-    diff_metal_reduce_factor = am.diff_metal_reduce_factor;
-
-    return *this;
-  }
-};
-
-struct VINFO
+struct Violation
 {
   int routing_level;
-  std::vector<odb::dbITerm*> iterms;
-  int antenna_cell_nums;
+  std::vector<odb::dbITerm*> gates;
+  int diode_count_per_gate;
+  double excess_ratio;
+};
+
+using Violations = std::vector<Violation>;
+
+// One antenna ratio of a gate on a layer: the ratio the routing produces
+// (actual), the rule's limit (required), and whether actual exceeds it.
+struct RatioCheck
+{
+  double actual{0.0};
+  double required{0.0};
+  bool violated{false};
+};
+
+// The ratios checked for one gate on one layer that has an antenna rule.
+// Side area ratios (psr, csr) apply to routing layers only.
+struct LayerCheck
+{
+  odb::dbTechLayer* layer{nullptr};
+  RatioCheck par;
+  RatioCheck car;
+  std::optional<RatioCheck> psr;
+  std::optional<RatioCheck> csr;
+  bool violated{false};
+};
+
+// The checks for one gate pin of a net, in layer order.
+struct PinCheck
+{
+  odb::dbITerm* gate{nullptr};
+  std::vector<LayerCheck> layers;
+  bool violated{false};
+};
+
+// The checks for every gate pin of a net.  A net without wires has no pins.
+struct NetCheck
+{
+  odb::dbNet* net{nullptr};
+  std::vector<PinCheck> pins;
+  bool violated{false};
+};
+
+// The checks for the routed nets of a design, in net id order.
+struct DesignCheck
+{
+  std::vector<NetCheck> nets;
+
+  int violatingNets() const;
+  int violatingPins() const;
 };
 
 class AntennaChecker
 {
  public:
-  AntennaChecker();
+  AntennaChecker(odb::dbDatabase* db, utl::Logger* logger);
   ~AntennaChecker();
 
-  void init(odb::dbDatabase* db,
-            utl::Logger *logger);
-  dbNet* get_net(std::string net_name);
+  // Checks the routing of net, or of every signal net when net is nullptr,
+  // and returns the result without printing anything.  Uses the detailed
+  // routes, or temporary wires built from the global route guides when
+  // there are none.
+  DesignCheck check(odb::dbNet* net = nullptr, int num_threads = 1);
+  // check_antennas: runs check() and reports the result -- the counts and
+  // metrics, the violating nets (or the one net) when verbose, and the
+  // report file if one is set.  Returns the number of violating nets.
+  int checkAntennas(odb::dbNet* net = nullptr,
+                    int num_threads = 1,
+                    bool verbose = false);
+  // Number of violating nets / gate pins found by the last checkAntennas.
+  int antennaViolationCount() const;
+  int pinViolationCount() const;
+  // Checks one net's routing and returns every ratio checked for its gates.
+  NetCheck checkNet(odb::dbNet* net, float ratio_margin = 0);
+  Violations getAntennaViolations(odb::dbNet* net,
+                                  odb::dbMTerm* diode_mterm,
+                                  float ratio_margin);
+  void setReportFileName(const char* file_name);
 
-  template <class valueType>
-  double defdist(valueType value);
-
-  // wireroots_info_vec find_segment_root(std::pair<dbWireGraph::Node*,
-  // std::vector<dbWireGraph::Node*>> node_info, int wire_level );
-  dbWireGraph::Node* find_segment_root(dbWireGraph::Node* node_info,
-                                       int wire_level);
-  dbWireGraph::Node* find_segment_start(dbWireGraph::Node* node);
-  bool if_segment_root(dbWireGraph::Node* node, int wire_level);
-
-  void find_wire_below_iterms(dbWireGraph::Node* node,
-                              double iterm_areas[2],
-                              int wire_level,
-                              std::set<dbITerm*>& iv,
-                              std::set<dbWireGraph::Node*>& nv);
-  std::pair<double, double> calculate_wire_area(
-      dbWireGraph::Node* node,
-      int wire_level,
-      std::set<dbWireGraph::Node*>& nv,
-      std::set<dbWireGraph::Node*>& level_nodes);
-
-  double get_via_area(dbWireGraph::Edge* edge);
-  dbTechLayer* get_via_layer(dbWireGraph::Edge* edge);
-  std::string get_via_name(dbWireGraph::Edge* edge);
-  double calculate_via_area(dbWireGraph::Node* node, int wire_level);
-  dbWireGraph::Edge* find_via(dbWireGraph::Node* node, int wire_level);
-
-  void find_car_path(dbWireGraph::Node* node,
-                     int wire_level,
-                     dbWireGraph::Node* goal,
-                     std::vector<dbWireGraph::Node*>& current_path,
-                     std::vector<dbWireGraph::Node*>& path_found);
-
-  void print_graph_info(dbWireGraph graph);
-  void calculate_PAR_info(PARinfo& PARtable);
-  bool check_iterm(dbWireGraph::Node* node, double iterm_areas[2]);
-  double get_pwl_factor(odb::dbTechLayerAntennaRule::pwl_pair pwl_info,
-                        double ref_val,
-                        double def);
-
-  void build_wire_PAR_table(std::vector<PARinfo>& PARtable,
-                            std::vector<dbWireGraph::Node*> wireroots_info);
-  void build_wire_CAR_table(std::vector<ARinfo>& CARtable,
-                            std::vector<PARinfo> PARtable,
-                            std::vector<PARinfo> VIA_PARtable,
-                            std::vector<dbWireGraph::Node*> gate_iterms);
-  void build_VIA_PAR_table(std::vector<PARinfo>& VIA_PARtable,
-                           std::vector<dbWireGraph::Node*> wireroots_info);
-  void build_VIA_CAR_table(std::vector<ARinfo>& VIA_CARtable,
-                           std::vector<PARinfo> PARtable,
-                           std::vector<PARinfo> VIA_PARtable,
-                           std::vector<dbWireGraph::Node*> gate_iterms);
-
-  // std::vector<wireroots_info_vec> get_wireroots(dbWireGraph graph);
-  std::vector<dbWireGraph::Node*> get_wireroots(dbWireGraph graph);
-
-  std::pair<bool, bool> check_wire_PAR(ARinfo AntennaRatio, bool simple_report, bool print);
-  std::pair<bool, bool> check_wire_CAR(ARinfo AntennaRatio, bool par_checked, bool simple_report, bool print);
-  bool check_VIA_PAR(ARinfo AntennaRatio, bool simple_report, bool print);
-  bool check_VIA_CAR(ARinfo AntennaRatio, bool simple_report, bool print);
-
-  std::vector<int> GetAntennaRatio(std::string path, bool simple_report);
-
-  void load_antenna_rules();
-  void check_antenna_cell();
-  void check_antennas(std::string report_filename, bool simple_report);
-
-  bool check_violation(PARinfo par_info, dbTechLayer* layer);
-
-  void find_wireroot_iterms(dbWireGraph::Node* node,
-                            int wire_level,
-                            std::vector<dbITerm*>& gates);
-  std::vector<std::pair<double, std::vector<dbITerm*>>> PAR_max_wire_length(
-      dbNet* net,
-      int layer);
-  void check_max_length(const char *net_name,
-                        int layer);
-  std::vector<VINFO> get_net_antenna_violations(dbNet* net,
-                                                std::string antenna_cell_name
-                                                = "",
-                                                std::string cell_pin = "");
-  std::vector<std::pair<double, std::vector<dbITerm*>>>
-  get_violated_wire_length(dbNet* net, int routing_level);
-
-  void find_max_wire_length();
+  // Used in repair
+  void initAntennaRules();
+  void makeNetWiresFromGuides(const std::vector<odb::dbNet*>& nets);
 
  private:
-  odb::dbDatabase* db_;
-  utl::Logger *logger_;
-  FILE* _out;
-  std::map<odb::dbTechLayer*, ANTENNAmodel> layer_info;
+  class Impl;
+  std::unique_ptr<Impl> impl_;
 };
 
 }  // namespace ant

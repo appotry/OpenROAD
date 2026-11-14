@@ -1,1 +1,0 @@
-include("swig_lib")

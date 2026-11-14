@@ -1,33 +1,5 @@
-#
-# BSD 3-Clause License
-#
-# Copyright (c) 2019, Nefelus Inc
-# All rights reserved.
-#
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions are met:
-#
-# * Redistributions of source code must retain the above copyright notice, this
-#   list of conditions and the following disclaimer.
-#
-# * Redistributions in binary form must reproduce the above copyright notice,
-#   this list of conditions and the following disclaimer in the documentation
-#   and/or other materials provided with the distribution.
-#
-# * Neither the name of the copyright holder nor the names of its
-#   contributors may be used to endorse or promote products derived from
-#   this software without specific prior written permission.
-#
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2019-2025, The OpenROAD Authors
 
 %{
 #include "ext.h"
@@ -274,7 +246,7 @@ module Ext
         in bool end [ usage = "Close open output file" ; ],
         in bool use_ids [ usage = "Use net ids instead of names" ; ],
 	in bool no_name_map [ usage = "Don't write name map" ; ],
-        in string N = "" [ usage = "Write node coordinates. m: Magma, s: Synopsys-StarRC" ; ],
+        in string N = "" [ usage = "Write node coordinates." ; ],
         in bool term_junction_xy [ usage = "write wire junction coordinate of terms" ; ],
         in bool single_pi [ usage = "Write gnd cap of segment on target cap node, do not split" ; ],
         in string file [ usage = "output SPEF file" ; ],
@@ -305,7 +277,7 @@ module Ext
 	in bool keep_loaded_corner [ usage = "don't destroy previously loaded corners" ; ],
         in bool stamp_wire [ usage = "attach junction id to capNode" ; ],
 	in int test_parsing = 0 [ usage = "Only parse every token; if 2, just counts D_NETS, Rs, CCs, Cs" ; ],
-        in string N = "" [ usage = "Read node coordinates. m: Magma, s: Synopsys-StarRC" ; ],
+        in string N = "" [ usage = "Read node coordinates. " ; ],
         in bool r_conn [ usage = "debug: read conn's in *D_NET" ; ],
         in bool r_cap [ usage = "debug: read cap's in *D_NET" ; ],
         in bool r_cc_cap [ usage = "debug: read only cc's in  *CAP in *D_NET" ; ],

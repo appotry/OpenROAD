@@ -1,35 +1,12 @@
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-// 
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: BSD-3-Clause
+// Copyright (c) 2019-2025, The OpenROAD Authors
 
 #pragma once
 
-namespace odb {
-class dbDatabase;
-}
+#include "tcl.h"
 
 namespace sta {
-class dbSta;
-}
 
-namespace ord {
+void initDbSta(Tcl_Interp* tcl_interp);
 
-class OpenRoad;
-
-sta::dbSta *
-makeDbSta();
-void
-deleteDbSta(sta::dbSta *sta);
-void
-initDbSta(OpenRoad *openroad);
-
-} // namespace
+}  // namespace sta

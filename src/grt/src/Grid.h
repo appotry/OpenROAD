@@ -1,182 +1,97 @@
-/////////////////////////////////////////////////////////////////////////////
-//
-// BSD 3-Clause License
-//
-// Copyright (c) 2019, University of California, San Diego.
-// All rights reserved.
-//
-// Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions are met:
-//
-// * Redistributions of source code must retain the above copyright notice, this
-//   list of conditions and the following disclaimer.
-//
-// * Redistributions in binary form must reproduce the above copyright notice,
-//   this list of conditions and the following disclaimer in the documentation
-//   and/or other materials provided with the distribution.
-//
-// * Neither the name of the copyright holder nor the names of its
-//   contributors may be used to endorse or promote products derived from
-//   this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
-// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-// POSSIBILITY OF SUCH DAMAGE.
-//
-///////////////////////////////////////////////////////////////////////////////
+// SPDX-License-Identifier: BSD-3-Clause
+// Copyright (c) 2019-2025, The OpenROAD Authors
 
 #pragma once
 
 #include <cmath>
-#include <iostream>
-#include <map>
 #include <vector>
 
-#include "RoutingLayer.h"
-#include "opendb/db.h"
+#include "boost/icl/interval.hpp"
+#include "odb/dbTypes.h"
+#include "odb/geom.h"
 
 namespace grt {
 
+using boost::icl::interval;
+
 class Grid
 {
- private:
-  long _lowerLeftX;
-  long _lowerLeftY;
-  long _upperRightX;
-  long _upperRightY;
-  long _tileWidth;
-  long _tileHeight;
-  int _xGrids;
-  int _yGrids;
-  bool _perfectRegularX;
-  bool _perfectRegularY;
-  int _numLayers;
-  int _pitchesInTile = 15;
-  std::vector<int> _spacings;
-  std::vector<int> _minWidths;
-  std::vector<int> _horizontalEdgesCapacities;
-  std::vector<int> _verticalEdgesCapacities;
-  std::map<int, std::vector<odb::Rect>> _obstructions;
-
  public:
   Grid() = default;
   ~Grid() = default;
 
-  void init(const long lowerLeftX,
-            const long lowerLeftY,
-            const long upperRightX,
-            const long upperRightY,
-            const long tileWidth,
-            const long tileHeight,
-            const int xGrids,
-            const int yGrids,
-            const bool perfectRegularX,
-            const bool perfectRegularY,
-            const int numLayers,
-            const std::vector<int>& spacings,
-            const std::vector<int>& minWidths,
-            const std::vector<int>& horizontalCapacities,
-            const std::vector<int>& verticalCapacities,
-            const std::map<int, std::vector<odb::Rect>>& obstructions);
-
-  typedef struct
-  {
-    int _x;
-    int _y;
-  } TILE;
+  void init(const odb::Rect& die_area,
+            int tile_size,
+            int x_grids,
+            int y_grids,
+            bool perfect_regular_x,
+            bool perfectR_rgular_y,
+            int num_layers);
 
   void clear();
 
-  long getLowerLeftX() const { return _lowerLeftX; }
-  long getLowerLeftY() const { return _lowerLeftY; }
+  int getXMin() const { return die_area_.xMin(); }
+  int getYMin() const { return die_area_.yMin(); }
 
-  void setLowerLeftX(long x) { _lowerLeftX = x; }
-  void setLowerLeftY(long y) { _lowerLeftY = y; }
+  void setXMin(int x) { die_area_.set_xlo(x); }
+  void setYMin(int y) { die_area_.set_ylo(y); }
 
-  long getUpperRightX() const { return _upperRightX; }
-  long getUpperRightY() const { return _upperRightY; }
+  int getXMax() const { return die_area_.xMax(); }
+  int getYMax() const { return die_area_.yMax(); }
 
-  long getTileWidth() const { return _tileWidth; }
-  long getTileHeight() const { return _tileHeight; }
+  int getTileSize() const { return tile_size_; }
 
-  int getXGrids() const { return _xGrids; }
-  int getYGrids() const { return _yGrids; }
+  int getXGrids() const { return x_grids_; }
+  int getYGrids() const { return y_grids_; }
 
-  bool isPerfectRegularX() const { return _perfectRegularX; }
-  bool isPerfectRegularY() const { return _perfectRegularY; }
+  void setXGrids(int x_grids) { x_grids_ = x_grids; }
+  void setYGrids(int y_grids) { y_grids_ = y_grids; }
 
-  int getNumLayers() const { return _numLayers; }
+  bool isPerfectRegularX() const { return perfect_regular_x_; }
+  bool isPerfectRegularY() const { return perfect_regular_y_; }
 
-  void setPitchesInTile(const int pitchesInTile)
-  {
-    _pitchesInTile = pitchesInTile;
-  }
-  int getPitchesInTile() const { return _pitchesInTile; }
+  int getNumLayers() const { return num_layers_; }
 
-  const std::vector<int>& getSpacings() const { return _spacings; }
-  const std::vector<int>& getMinWidths() const { return _minWidths; }
+  const std::vector<int>& getTrackPitches() const { return track_pitches_; }
 
-  void addSpacing(int value, int layer) { _spacings[layer] = value; }
-  void addMinWidth(int value, int layer) { _minWidths[layer] = value; }
-
-  const std::vector<int>& getHorizontalEdgesCapacities()
-  {
-    return _horizontalEdgesCapacities;
-  };
-  const std::vector<int>& getVerticalEdgesCapacities()
-  {
-    return _verticalEdgesCapacities;
-  };
-
-  void addHorizontalCapacity(int value, int layer)
-  {
-    _horizontalEdgesCapacities[layer] = value;
-  }
-  void addVerticalCapacity(int value, int layer)
-  {
-    _verticalEdgesCapacities[layer] = value;
-  }
-
-  void updateHorizontalEdgesCapacities(int layer, int reduction)
-  {
-    _horizontalEdgesCapacities[layer] = reduction;
-  };
-  void updateVerticalEdgesCapacities(int layer, int reduction)
-  {
-    _verticalEdgesCapacities[layer] = reduction;
-  };
-
-  const std::map<int, std::vector<odb::Rect>>& getAllObstructions() const
-  {
-    return _obstructions;
-  }
-  void addObstruction(int layer, const odb::Rect& obstruction)
-  {
-    _obstructions[layer].push_back(obstruction);
-  }
+  void addTrackPitch(int value, int layer) { track_pitches_[layer] = value; }
 
   odb::Point getPositionOnGrid(const odb::Point& position);
 
-  std::pair<TILE, TILE> getBlockedTiles(const odb::Rect& obstruction,
-                                        odb::Rect& firstTileBds,
-                                        odb::Rect& lastTileBds);
+  void getBlockedTiles(const odb::Rect& obstruction,
+                       odb::Rect& first_tile_bds,
+                       odb::Rect& last_tile_bds,
+                       odb::Point& first_tile,
+                       odb::Point& last_tile);
 
   int computeTileReduce(const odb::Rect& obs,
                         const odb::Rect& tile,
-                        int trackSpace,
+                        double track_space,
                         bool first,
-                        bool direction);
+                        odb::dbTechLayerDir direction);
+
+  interval<int>::type computeTileReduceInterval(
+      const odb::Rect& obs,
+      const odb::Rect& tile,
+      int track_space,
+      bool first,
+      const odb::dbTechLayerDir& direction,
+      int layer_cap,
+      bool is_macro);
 
   odb::Point getMiddle();
-  odb::Rect getGridArea() const;
+  const odb::Rect& getGridArea() const;
+  odb::Point getPositionFromGridPoint(int x, int y);
+
+ private:
+  odb::Rect die_area_;
+  int tile_size_;
+  int x_grids_;
+  int y_grids_;
+  bool perfect_regular_x_;
+  bool perfect_regular_y_;
+  int num_layers_;
+  std::vector<int> track_pitches_;
 };
 
 }  // namespace grt

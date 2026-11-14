@@ -1,24 +1,5 @@
-pipeline {
-  agent any;
-  stages {
-    stage('Build for Coverage') {
-      steps {
-        sh './etc/Build.sh -coverage';
-      }
-    }
-    stage('Dynamic Code Coverage') {
-      steps {
-        sh './etc/CodeCoverage.sh dynamic';
-        publishHTML([
-            allowMissing: false,
-            alwaysLinkToLastBuild: false,
-            keepAll: false,
-            reportDir: 'coverage-output',
-            reportFiles: 'index.html',
-            reportName: 'Dynamic Code Coverage',
-            reportTitles: ''
-        ]);
-      }
-    }
-  }
+@Library('utils@main') _
+
+k8sPodTemplate(coordinator: true, cloud: utilPickCloud()) {
+    pipelineORCoverage(k8s: true)
 }

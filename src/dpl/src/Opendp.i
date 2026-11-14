@@ -1,119 +1,47 @@
-/////////////////////////////////////////////////////////////////////////////
-//
-// Copyright (c) 2019, OpenROAD
-// All rights reserved.
-//
-// BSD 3-Clause License
-//
-// Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions are met:
-//
-// * Redistributions of source code must retain the above copyright notice, this
-//   list of conditions and the following disclaimer.
-//
-// * Redistributions in binary form must reproduce the above copyright notice,
-//   this list of conditions and the following disclaimer in the documentation
-//   and/or other materials provided with the distribution.
-//
-// * Neither the name of the copyright holder nor the names of its
-//   contributors may be used to endorse or promote products derived from
-//   this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
-// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-// POSSIBILITY OF SUCH DAMAGE.
-///////////////////////////////////////////////////////////////////////////////
+// SPDX-License-Identifier: BSD-3-Clause
+// Copyright (c) 2019-2025, The OpenROAD Authors
 
+// clang-format off
 %{
+
+#include <sstream>
+
 #include "ord/OpenRoad.hh"
+#include "graphics/Graphics.h"
+#include "graphics/DplObserver.h"
 #include "dpl/Opendp.h"
-
-using dpl::StringSeq;
-
-StringSeq *
-tclListSeqString(Tcl_Obj *const source,
-                 Tcl_Interp *interp)
-{
-  int argc;
-  Tcl_Obj **argv;
-
-  if (Tcl_ListObjGetElements(interp, source, &argc, &argv) == TCL_OK) {
-    StringSeq *seq = new StringSeq;
-    for (int i = 0; i < argc; i++) {
-      int length;
-      const char *str = Tcl_GetStringFromObj(argv[i], &length);
-      seq->push_back(str);
-    }
-    return seq;
-  }
-  else
-    return nullptr;
-}
-
-// Failed attempt to pass in dbMaster set.
-#if 0
-// copied from opensta/tcl/StaTcl.i
-template <class TYPE>
-std::set<TYPE> *
-tclListSet(Tcl_Obj *const source,
-           swig_type_info *swig_type,
-           Tcl_Interp *interp)
-{
-  int argc;
-  Tcl_Obj **argv;
-
-  if (Tcl_ListObjGetElements(interp, source, &argc, &argv) == TCL_OK
-      && argc > 0) {
-    std::set<TYPE> *set = new std::set<TYPE>;
-    for (int i = 0; i < argc; i++) {
-      void *obj;
-      // Ignore returned TCL_ERROR because can't get swig_type_info.
-      SWIG_ConvertPtr(argv[i], &obj, swig_type, false);
-      set->insert(reinterpret_cast<TYPE>(obj));
-    }
-    return set;
-  }
-  else
-    return nullptr;
-}
-  
-dpl::dbMasterSet *
-tclListSetdbMaster(Tcl_Obj *const source,
-                   Tcl_Interp *interp)
-{
-  return tclListSet<odb::dbMaster*>(source, SWIGTYPE_p_dbMaster, interp);
-}
-
-%typemap(in) dbMasterSet * {
-  $1 = tclListSeqLibertyLibrary($input, interp);
-}
-#endif
+#include "utl/Logger.h"
 
 %}
 
-%typemap(in) StringSeq* {
-  $1 = tclListSeqString($input, interp);
-}
-
 %include "../../Exception.i"
+
+%import <std_vector.i>
+%import "dbtypes.i"
 
 %inline %{
 
 namespace dpl {
 
 void
-detailed_placement_cmd(int max_displacment)
-{
+detailed_placement_cmd(int max_displacment_x,
+                       int max_displacment_y,
+                       const char* report_file_name,
+                       bool incremental,
+                       bool use_diamond_legalizer,
+                       int site_search_window,
+                       int row_search_window,
+                       double drc_penalty,
+                       bool disable_window_extension,
+                       bool pdn_aware,
+                       bool quiet){
   dpl::Opendp *opendp = ord::OpenRoad::openRoad()->getOpendp();
-  opendp->detailedPlacement(max_displacment);
+  opendp->detailedPlacement(max_displacment_x, max_displacment_y,
+                            std::string(report_file_name),
+                            incremental, use_diamond_legalizer,
+                            site_search_window, row_search_window,
+                            drc_penalty, disable_window_extension,
+                            quiet, pdn_aware);
 }
 
 void
@@ -123,11 +51,15 @@ report_legalization_stats()
   opendp->reportLegalizationStats();
 }
 
-bool
-check_placement_cmd(bool verbose)
+void
+check_placement_cmd(bool verbose,
+                    const char* report_file_name,
+                    bool check_fixed,
+                    bool check_placeable)
 {
   dpl::Opendp *opendp = ord::OpenRoad::openRoad()->getOpendp();
-  return opendp->checkPlacement(verbose);
+  opendp->checkPlacement(
+      verbose, std::string(report_file_name), check_fixed, check_placeable);
 }
 
 
@@ -158,11 +90,19 @@ set_padding_inst(odb::dbInst *inst,
 }
 
 void
-filler_placement_cmd(const char* prefix, 
-                     StringSeq *fillers)
+filler_placement_cmd(const std::vector<odb::dbMaster*>& filler_masters,
+                     const char* prefix,
+                     bool verbose)
 {
   dpl::Opendp *opendp = ord::OpenRoad::openRoad()->getOpendp();
-  opendp->fillerPlacement(fillers, prefix);
+  opendp->fillerPlacement(filler_masters, prefix, verbose);
+}
+
+void
+remove_fillers_cmd()
+{
+  dpl::Opendp *opendp = ord::OpenRoad::openRoad()->getOpendp();
+  opendp->removeFillers();
 }
 
 void
@@ -170,6 +110,91 @@ optimize_mirroring_cmd()
 {
   dpl::Opendp *opendp = ord::OpenRoad::openRoad()->getOpendp();
   opendp->optimizeMirroring();
+}
+
+void
+set_debug_cmd(float min_displacement,
+              const odb::dbInst* debug_instance,
+              int jump_moves,
+              bool iterative_placement,
+              bool deep_iterative_placement,
+              bool paint_pixels,
+              bool paint_negotiation_pixels)
+{
+  dpl::Opendp* opendp = ord::OpenRoad::openRoad()->getOpendp();
+  opendp->setJumpMoves(jump_moves);
+  opendp->setIterativePlacement(iterative_placement);
+  opendp->setDeepIterativePlacement(deep_iterative_placement);
+  if (dpl::Graphics::guiActive()) {
+      std::unique_ptr<DplObserver> graphics = std::make_unique<dpl::Graphics>(
+          opendp, debug_instance, paint_pixels, paint_negotiation_pixels);
+      opendp->setDebug(graphics);
+  }
+}
+
+void set_negotiation_debug_interval_cmd(int iterative_jump)
+{
+  dpl::Opendp* opendp = ord::OpenRoad::openRoad()->getOpendp();
+  opendp->setNegotiationDebugInterval(iterative_jump);
+}
+
+void set_negotiation_debug_start_cmd(int iterative_start)
+{
+  dpl::Opendp* opendp = ord::OpenRoad::openRoad()->getOpendp();
+  opendp->setNegotiationDebugStart(iterative_start);
+}
+
+void improve_placement_cmd(int seed,
+  int max_displacement_x,
+  int max_displacement_y)
+{
+  dpl::Opendp* opendp = ord::OpenRoad::openRoad()->getOpendp();
+  opendp->improvePlacement(seed, max_displacement_x, max_displacement_y);
+}
+
+void reset_global_swap_params_cmd()
+{
+  dpl::Opendp* opendp = ord::OpenRoad::openRoad()->getOpendp();
+  opendp->resetGlobalSwapParams();
+}
+
+void configure_global_swap_params_cmd(int passes,
+                                      double tolerance,
+                                      double tradeoff,
+                                      double area_weight,
+                                      double pin_weight,
+                                      double user_weight,
+                                      int sampling_moves,
+                                      int normalization_interval,
+                                      double profiling_excess,
+                                      const char* budget_multipliers_str)
+{
+  std::vector<double> budget_multipliers;
+  if (budget_multipliers_str != nullptr) {
+    std::stringstream ss(budget_multipliers_str);
+    double value;
+    while (ss >> value) {
+      budget_multipliers.push_back(value);
+    }
+  }
+
+  dpl::Opendp* opendp = ord::OpenRoad::openRoad()->getOpendp();
+  opendp->configureGlobalSwapParams(passes,
+                                    tolerance,
+                                    tradeoff,
+                                    area_weight,
+                                    pin_weight,
+                                    user_weight,
+                                    sampling_moves,
+                                    normalization_interval,
+                                    profiling_excess,
+                                    budget_multipliers);
+}
+
+void set_extra_dpl_cmd(bool enable)
+{
+  dpl::Opendp* opendp = ord::OpenRoad::openRoad()->getOpendp();
+  opendp->setExtraDplEnabled(enable);
 }
 
 } // namespace

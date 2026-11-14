@@ -1,128 +1,149 @@
-/*
-BSD 3-Clause License
+// SPDX-License-Identifier: BSD-3-Clause
+// Copyright (c) 2024-2025, The OpenROAD Authors
 
-Copyright (c) 2020, The Regents of the University of Minnesota
-
-All rights reserved.
-
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions are met:
-
-* Redistributions of source code must retain the above copyright notice, this
-  list of conditions and the following disclaimer.
-
-* Redistributions in binary form must reproduce the above copyright notice,
-  this list of conditions and the following disclaimer in the documentation
-  and/or other materials provided with the distribution.
-
-* Neither the name of the copyright holder nor the names of its
-  contributors may be used to endorse or promote products derived from
-  this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-*/
-
-#ifndef __IRSOLVER_NODE__
-#define __IRSOLVER_NODE__
+#pragma once
 
 #include <map>
-#include "opendb/db.h"
-#include "utl/Logger.h"
+#include <memory>
+#include <set>
+#include <string>
+#include <tuple>
+#include <vector>
+
+#include "odb/geom.h"
+#include "odb/geom_boost.h"
+
+namespace odb {
+class dbBox;
+class dbTechLayer;
+class dbBPin;
+class dbITerm;
+}  // namespace odb
+
+namespace utl {
+class Logger;
+}
+
 namespace psm {
-using odb::dbInst;
+class Shape;
 
-typedef std::pair<int, int> NodeLoc;
-typedef std::pair<int, int> BBox;
-typedef int                 NodeIdx;  // TODO temp as it interfaces with SUPERLU
-typedef std::pair<NodeIdx, NodeIdx> GMatLoc;
-
-//! Data structure for the Dictionary of Keys Matrix
-typedef struct
-{
-  NodeIdx                   num_rows;
-  NodeIdx                   num_cols;
-  std::map<GMatLoc, double> values;  // pair < col_num, row_num >
-} DokMatrix;
-
-//! Data structure for the Compressed Sparse Column Matrix
-typedef struct
-{
-  NodeIdx              num_rows;
-  NodeIdx              num_cols;
-  NodeIdx              nnz;
-  std::vector<NodeIdx> row_idx;
-  std::vector<NodeIdx> col_ptr;
-  std::vector<double>  values;
-} CscMatrix;
-
-//! Node class which stores the properties of the node of the PDN
 class Node
 {
  public:
-  Node() : m_loc(std::make_pair(0.0, 0.0)), m_bBox(std::make_pair(0.0, 0.0)) {}
-  ~Node() {}
-  //! Get the layer number of the node
-  int GetLayerNum();
-  //! Set the layer number of the node
-  void SetLayerNum(int layer);
-  //! Get the location of the node
-  NodeLoc GetLoc();
-  //! Set the location of the node using x and y coordinates
-  void SetLoc(int x, int y);
-  //! Set the location of the node using x,y and layer information
-  void SetLoc(int x, int y, int l);
-  //! Get location of the node in G matrix
-  NodeIdx GetGLoc();
-  //! Get location of the node in G matrix
-  void SetGLoc(NodeIdx loc);
-  //! Function to print node details
-  void Print(utl::Logger* logger);
-  //! Function to set the bounding box of the stripe
-  void SetBbox(int dX, int dY);
-  //! Function to get the bounding box of the stripe
-  BBox GetBbox();
-  //! Function to update the stripe
-  void UpdateMaxBbox(int dX, int dY);
-  //! Function to set the current value at a particular node
-  void SetCurrent(double t_current);
-  //! Function to get the value of current at a node
-  double GetCurrent();
-  //! Function to add the current source
-  void AddCurrentSrc(double t_current);
-  //! Function to set the value of the voltage source
-  void SetVoltage(double t_voltage);
-  //! Function to get the value of the voltage source
-  double GetVoltage();
+  enum class NodeType
+  {
+    kNode,
+    kSource,
+    kITerm,
+    kBPin,
+    kUnknown
+  };
 
-  bool GetConnected();
+  struct Compare
+  {
+    bool operator()(const Node* lhs, const Node* rhs) const
+    {
+      return lhs->compare(rhs) < 0;
+    }
+  };
 
-  void SetConnected();
+  using NodeSet = std::set<Node*, Compare>;
 
-  bool HasInstances();
+  Node(const odb::Point& pt, odb::dbTechLayer* layer);
+  virtual ~Node() = default;
 
-  std::vector<dbInst*> GetInstances();
+  // Returns -1 if this < other, 0 if equal, +1 if this > other
+  int compare(const Node* other) const;
+  int compare(const std::unique_ptr<Node>& other) const;
 
-  void AddInstance(dbInst* inst);
+  const odb::Point& getPoint() const { return pt_; };
+  odb::dbTechLayer* getLayer() const { return layer_; };
+
+  bool isVisited() const { return visited_; }
+  void setVisited(bool visited) { visited_ = visited; }
+
+  void print(utl::Logger* logger, const std::string& prefix = "") const;
+  virtual std::string describe(const std::string& prefix) const;
+
+  std::string getName() const;
+  std::string getTypeName() const;
+
+ protected:
+  virtual NodeType getType() const { return NodeType::kNode; }
+
+  virtual int getTypeCompareInfo() const { return 0; };
 
  private:
-  int                  m_layer;
-  NodeLoc              m_loc;  // layer,x,y
-  NodeIdx              m_node_loc{0};
-  BBox                 m_bBox;
-  double               m_current_src{0.0};
-  double               m_voltage{0.0};
-  bool                 m_connected{false};
-  bool                 m_has_instances{false};
-  std::vector<dbInst*> m_connected_instances;
+  double getDBUs() const;
+
+  odb::Point pt_;
+  odb::dbTechLayer* layer_;
+  bool visited_ = false;
 };
+
+class SourceNode : public Node
+{
+ public:
+  SourceNode(Node* node);
+
+  Node* getSource() const { return source_; }
+
+ protected:
+  NodeType getType() const override { return NodeType::kSource; }
+
+ private:
+  Node* source_;
+};
+
+using SourceNodes = std::vector<std::unique_ptr<SourceNode>>;
+
+class TerminalNode : public Node
+{
+ public:
+  TerminalNode(const odb::Rect& shape, odb::dbTechLayer* layer);
+
+  const odb::Rect& getBBox() const { return shape_; }
+
+ private:
+  odb::Rect shape_;
+};
+
+class ITermNode : public TerminalNode
+{
+ public:
+  ITermNode(odb::dbITerm* iterm, const odb::Point& pt, odb::dbTechLayer* layer);
+
+  odb::dbITerm* getITerm() const { return iterm_; }
+
+  std::string describe(const std::string& prefix) const override;
+
+ protected:
+  NodeType getType() const override { return NodeType::kITerm; }
+
+  int getTypeCompareInfo() const override;
+
+ private:
+  odb::dbITerm* iterm_;
+};
+
+class BPinNode : public TerminalNode
+{
+ public:
+  BPinNode(odb::dbBPin* pin, odb::dbBox* box, odb::dbTechLayer* layer);
+
+  const odb::dbBPin* getBPin() const { return pin_; }
+  bool shouldConnect() const;
+
+ protected:
+  NodeType getType() const override { return NodeType::kBPin; }
+
+  int getTypeCompareInfo() const override;
+
+ private:
+  odb::dbBPin* pin_;
+  odb::dbBox* box_;
+
+  static constexpr const char* kDisconnectProperty = "PSM_DISCONNECT";
+};
+
 }  // namespace psm
-#endif

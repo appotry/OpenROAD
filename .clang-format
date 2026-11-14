@@ -1,5 +1,5 @@
 ---
-Language:        Cpp
+Language:      Cpp
 BasedOnStyle:  Google
 
 AllowAllParametersOfDeclarationOnNextLine: false
@@ -26,6 +26,8 @@ BraceWrapping:
   SplitEmptyNamespace:   true
 BreakBeforeBinaryOperators: All
 BreakBeforeBraces: Custom
+InsertBraces: true
+LineEnding: LF
 DerivePointerAlignment: false
 SpaceAfterCStyleCast: true
-Standard: c++17
+Standard: c++20

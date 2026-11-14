@@ -1,52 +1,25 @@
-/////////////////////////////////////////////////////////////////////////////
-//
-// BSD 3-Clause License
-//
-// Copyright (c) 2019, James Cherry, Parallax Software, Inc.
-// All rights reserved.
-//
-// Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions are met:
-//
-// * Redistributions of source code must retain the above copyright notice, this
-//   list of conditions and the following disclaimer.
-//
-// * Redistributions in binary form must reproduce the above copyright notice,
-//   this list of conditions and the following disclaimer in the documentation
-//   and/or other materials provided with the distribution.
-//
-// * Neither the name of the copyright holder nor the names of its
-//   contributors may be used to endorse or promote products derived from
-//   this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
-// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-// POSSIBILITY OF SUCH DAMAGE.
-//
-///////////////////////////////////////////////////////////////////////////////
+// SPDX-License-Identifier: BSD-3-Clause
+// Copyright (c) 2019-2025, The OpenROAD Authors
 
 %{
 
-#include "opendb/db.h"
-#include "opendb/lefin.h"
-#include "opendb/defin.h"
-#include "opendb/defout.h"
+#include "odb/db.h"
+#include "odb/defout.h"
 #include "sta/Report.hh"
 #include "sta/Network.hh"
 #include "db_sta/dbSta.hh"
 #include "db_sta/dbNetwork.hh"
 #include "db_sta/dbReadVerilog.hh"
-#include "ord/Version.hh"
 #include "utl/Logger.h"
 #include "ord/OpenRoad.hh"
+#include "odb/util.h"
+
+#include <thread>
+#include <vector>
+
+#if TCL_MAJOR_VERSION < 9 && !defined(Tcl_Size)
+  typedef int Tcl_Size;
+#endif
 
 ////////////////////////////////////////////////////////////////
 //
@@ -66,13 +39,24 @@ using odb::dbDatabase;
 OpenRoad *
 getOpenRoad()
 {
-  return OpenRoad::openRoad();
+  // From Python the current instance is the one set by the most recently
+  // created Tech, and destroying that Tech clears it even if older ones
+  // are still alive.
+  OpenRoad *openroad = OpenRoad::openRoad();
+  if (openroad == nullptr) {
+    utl::Logger::defaultLogger()->error(
+        utl::ORD, 105, "No current OpenROAD instance; create a Tech and keep it alive.");
+  }
+  return openroad;
 }
 
 utl::Logger *
 getLogger()
 {
-  return OpenRoad::openRoad()->getLogger();
+  // Python can log before any Tech exists; use the default logger then.
+  OpenRoad *openroad = OpenRoad::openRoad();
+  return openroad != nullptr ? openroad->getLogger()
+                             : utl::Logger::defaultLogger();
 }
 
 dbDatabase *
@@ -118,6 +102,27 @@ getResizer()
   return openroad->getResizer();
 }
 
+cgt::ClockGating *
+getClockGating()
+{
+  OpenRoad *openroad = getOpenRoad();
+  return openroad->getClockGating();
+}
+
+est::EstimateParasitics *
+getEstimateParasitics()
+{
+  OpenRoad *openroad = getOpenRoad();
+  return openroad->getEstimateParasitics();
+}
+
+rmp::Restructure *
+getRestructure()
+{
+  OpenRoad *openroad = getOpenRoad();
+  return openroad->getRestructure();
+}
+
 cts::TritonCTS *
 getTritonCts()
 {
@@ -146,7 +151,7 @@ getOpenRCX()
   return openroad->getOpenRCX();
 }
 
-triton_route::TritonRoute *
+drt::TritonRoute *
 getTritonRoute()
 {
   OpenRoad *openroad = getOpenRoad();
@@ -161,10 +166,17 @@ getPDNSim()
 }
 
 grt::GlobalRouter*
-getFastRoute()
+getGlobalRouter()
 {
   OpenRoad *openroad = getOpenRoad();
-  return openroad->getFastRoute();
+  return openroad->getGlobalRouter();
+}
+
+tap::Tapcell* 
+getTapcell()
+{
+  OpenRoad *openroad = getOpenRoad();
+  return openroad->getTapcell();
 }
 
 ppl::IOPlacer*
@@ -186,6 +198,27 @@ getPdnGen()
 {
   OpenRoad *openroad = getOpenRoad();
   return openroad->getPdnGen();
+}
+
+pad::ICeWall*
+getICeWall()
+{
+  OpenRoad *openroad = getOpenRoad();
+  return openroad->getICeWall();
+}
+
+stt::SteinerTreeBuilder*
+getSteinerTreeBuilder()
+{
+  OpenRoad *openroad = getOpenRoad();
+  return openroad->getSteinerTreeBuilder();
+}
+
+ram::RamGen*
+getRamGen()
+{
+  OpenRoad *openroad = getOpenRoad();
+  return openroad->getRamGen();
 }
 
 } // namespace ord
@@ -221,6 +254,8 @@ using odb::dbTech;
 //
 ////////////////////////////////////////////////////////////////
 
+%include <std_string.i>
+
 #ifdef SWIGTCL
 %include "Exception.i"
 
@@ -228,8 +263,26 @@ using odb::dbTech;
   $1 = sta::tclListSeqLibertyCell($input, interp);
 }
 
+%typemap(in) vector<const char*> * {
+  Tcl_Size argc;
+  Tcl_Obj **argv;
+
+  if (Tcl_ListObjGetElements(interp, $input, &argc, &argv) == TCL_OK) {
+    vector<const char*>* seq = new vector<const char*>;
+    for (Tcl_Size i = 0; i < argc; i++) {
+      Tcl_Size length;
+      const char* str = Tcl_GetStringFromObj(argv[i], &length);
+      seq->push_back(str);
+    }
+    $1 = seq;
+  }
+  else {
+    $1 = nullptr;
+  }
+}
+
 %typemap(in) utl::ToolId {
-  int length;
+  Tcl_Size length;
   const char *arg = Tcl_GetStringFromObj($input, &length);
   $1 = utl::Logger::findToolId(arg);
 }
@@ -240,30 +293,48 @@ using odb::dbTech;
 const char *
 openroad_version()
 {
-  return OPENROAD_VERSION;
+  return ord::OpenRoad::getVersion();
 }
 
 const char *
-openroad_git_sha1()
+openroad_git_describe()
 {
-  return OPENROAD_GIT_SHA1;
+  return ord::OpenRoad::getGitDescribe();
+}
+
+bool
+openroad_gpu_compiled()
+{
+  return ord::OpenRoad::getGPUCompileOption();
+}
+
+bool
+openroad_gui_compiled()
+{
+  return ord::OpenRoad::getGUICompileOption();
 }
 
 void
 read_lef_cmd(const char *filename,
 	     const char *lib_name,
+	     const char *tech_name,
 	     bool make_tech,
 	     bool make_library)
 {
   OpenRoad *ord = getOpenRoad();
-  ord->readLef(filename, lib_name, make_tech, make_library);
+  ord->readLef(filename, lib_name, tech_name, make_tech, make_library);
 }
 
 void
-read_def_cmd(const char *filename, bool order_wires, bool continue_on_errors, bool floorplan_init, bool incremental)
+read_def_cmd(const char *filename,
+             bool continue_on_errors,
+             bool floorplan_init,
+             bool incremental,
+             odb::dbChip* chip)
 {
   OpenRoad *ord = getOpenRoad();
-  ord->readDef(filename, order_wires, continue_on_errors, floorplan_init, incremental);
+  ord->readDef(filename, chip, continue_on_errors,
+               floorplan_init, incremental);
 }
 
 void
@@ -274,27 +345,90 @@ write_def_cmd(const char *filename,
   ord->writeDef(filename, version);
 }
 
+void
+write_lef_cmd(const char *filename)
+{
+  OpenRoad *ord = getOpenRoad();
+  ord->writeLef(filename);
+}
+
+void
+write_abstract_lef_cmd(const char *filename,
+                       int bloat_factor,
+                       bool bloat_occupied_layers)
+{
+  OpenRoad *ord = getOpenRoad();
+  ord->writeAbstractLef(filename, bloat_factor, bloat_occupied_layers);
+}
+
 
 void 
-write_cdl_cmd(const char *filename,
+write_cdl_cmd(const char *outFilename,
+              vector<const char*>* mastersFilenames,
               bool includeFillers)
 {
   OpenRoad *ord = getOpenRoad();
-  ord->writeCdl(filename, includeFillers);
+  ord->writeCdl(outFilename, *mastersFilenames, includeFillers);
 }
 
 void
-read_db_cmd(const char *filename)
+read_3dbv_cmd(const char *filename)
 {
   OpenRoad *ord = getOpenRoad();
-  ord->readDb(filename);
+  ord->read3Dbv(filename);
 }
 
 void
-write_db_cmd(const char *filename)
+read_3dbx_cmd(const char *filename)
 {
   OpenRoad *ord = getOpenRoad();
-  ord->writeDb(filename);
+  ord->read3Dbx(filename);
+}
+
+void
+read_3dblox_bmap_cmd(const char *filename)
+{
+  OpenRoad *ord = getOpenRoad();
+  ord->read3DBloxBMap(filename);
+}
+
+void
+check_3dblox_cmd()
+{
+  OpenRoad *ord = getOpenRoad();
+  ord->check3DBlox();
+}
+
+void
+write_3dbv_cmd(const char *filename)
+{
+  OpenRoad *ord = getOpenRoad();
+  ord->write3Dbv(filename);
+}
+
+void
+write_3dbx_cmd(const char *filename)
+{
+  OpenRoad *ord = getOpenRoad();
+  ord->write3Dbx(filename);
+}
+
+void
+read_db_cmd(const char *filename, bool hierarchy)
+{
+  OpenRoad *ord = getOpenRoad();
+  ord->readDb(filename, hierarchy);
+}
+
+void
+write_db_cmd(const char *filename, int compression_level = -1)
+{
+  OpenRoad *ord = getOpenRoad();
+  std::optional<int> comp_level;
+  if (compression_level != -1) {
+    comp_level = compression_level;
+  }
+  ord->writeDb(filename, comp_level);
 }
 
 void
@@ -305,26 +439,18 @@ read_verilog_cmd(const char *filename)
 }
 
 void
-link_design_db_cmd(const char *design_name)
+link_design_db_cmd(const char *design_name,
+                   bool hierarchy,
+                   bool omit_filename_prop)
 {
   OpenRoad *ord = getOpenRoad();
-  ord->linkDesign(design_name);
+  ord->linkDesign(design_name, hierarchy, omit_filename_prop);
 }
 
 void
 ensure_linked()
 {
   return ensureLinked();
-}
-
-void
-write_verilog_cmd(const char *filename,
-		  bool sort,
-		  bool include_pwr_gnd,
-		  vector<LibertyCell*> *remove_cells)
-{
-  OpenRoad *ord = getOpenRoad();
-  ord->writeVerilog(filename, sort, include_pwr_gnd, remove_cells);
 }
 
 void
@@ -338,6 +464,9 @@ set_debug_level(const char* tool_name,
   auto id = utl::Logger::findToolId(tool_name);
   if (id == utl::UKN) {
     logger->error(utl::ORD, 15, "Unknown tool name {}", tool_name);
+  }
+  if (id == utl::STA) {
+    getSta()->setDebugLevel(group, level);
   }
   logger->setDebugLevel(id, group, level);
 }
@@ -359,7 +488,7 @@ get_db_tech()
 bool
 db_has_tech()
 {
-  return getDb()->getTech() != nullptr;
+  return !getDb()->getTechs().empty();
 }
 
 odb::dbBlock *
@@ -384,37 +513,43 @@ get_db_core()
 double
 dbu_to_microns(int dbu)
 {
-  return static_cast<double>(dbu) / getDb()->getTech()->getLefUnits();
+  auto tech = getDb()->getTech();
+  if (!tech) {
+    auto logger = getLogger();
+    logger->error(utl::ORD, 49, "No tech is loaded");
+  }
+  return static_cast<double>(dbu) / tech->getDbUnitsPerMicron();
 }
 
 int
 microns_to_dbu(double microns)
 {
-  return microns * getDb()->getTech()->getLefUnits();
+  auto tech = getDb()->getTech();
+  if (!tech) {
+    auto logger = getLogger();
+    logger->error(utl::ORD, 50, "No tech is loaded");
+  }
+  return std::round(microns * tech->getDbUnitsPerMicron());
 }
 
 // Common check for placement tools.
 bool
-db_has_rows()
+db_has_core_rows()
 {
   dbDatabase *db = OpenRoad::openRoad()->getDb();
-  return db->getChip()
-    && db->getChip()->getBlock()
-    && db->getChip()->getBlock()->getRows().size() > 0;
+  return dbHasCoreRows(db);
 }
 
 bool
-db_layer_has_tracks(unsigned layerId, bool hor)
+db_layer_has_tracks(odb::dbTechLayer* layer, bool hor)
 {
-  dbDatabase *db = OpenRoad::openRoad()->getDb();
-  dbBlock *block = db->getChip()->getBlock();
-  dbTech *tech = db->getTech();
-  
-  dbTechLayer *layer = tech->findRoutingLayer(layerId);
   if (!layer) {
     return false;
   }
     
+  dbDatabase *db = OpenRoad::openRoad()->getDb();
+  dbBlock *block = db->getChip()->getBlock();
+
   dbTrackGrid *trackGrid = block->findTrackGrid(layer);
   if (!trackGrid) {
     return false;
@@ -428,15 +563,15 @@ db_layer_has_tracks(unsigned layerId, bool hor)
 }
 
 bool
-db_layer_has_hor_tracks(unsigned layerId)
+db_layer_has_hor_tracks(odb::dbTechLayer* layer)
 {
-  return db_layer_has_tracks(layerId, true);
+  return db_layer_has_tracks(layer, true);
 }
 
 bool
-db_layer_has_ver_tracks(unsigned layerId)
+db_layer_has_ver_tracks(odb::dbTechLayer* layer)
 {
-  return db_layer_has_tracks(layerId, false);
+  return db_layer_has_tracks(layer, false);
 }
 
 sta::Sta *
@@ -459,44 +594,77 @@ units_initialized()
   return openroad->unitsInitialized();
 }
 
-#ifdef ENABLE_PYTHON3
-void
-python_cmd(const char* py_command)
-{
-  OpenRoad *openroad = getOpenRoad();
-  return openroad->pythonCommand(py_command);
-}
-#endif
-
 namespace ord {
 
 void
 set_thread_count(int threads)
 {
-  OpenRoad *ord = getOpenRoad();
-  ord->setThreadCount(threads);
+  getOpenRoad()->setThreadCount(threads);
 }
 
 void
 set_thread_count(const char* threads)
 {
-  OpenRoad *ord = getOpenRoad();
-  ord->setThreadCount(threads);
+  getOpenRoad()->setThreadCount(threads);
 }
 
 int
 thread_count()
 {
-  OpenRoad *ord = getOpenRoad();
-  return ord->getThreadCount();
+  return getOpenRoad()->getThreadCount();
 }
 
-void
-delete_all_memory()
+int
+cpu_count()
 {
-  ord::deleteAllMemory();
+  return std::thread::hardware_concurrency();
 }
 
+void design_created()
+{
+  OpenRoad *ord = getOpenRoad();
+  ord->designCreated();
 }
+
+std::string get_exe_path()
+{
+  OpenRoad *ord = getOpenRoad();
+  return ord->getExePath();
+}
+
+std::string get_docs_path()
+{
+  OpenRoad *ord = getOpenRoad();
+  return ord->getDocsPath();
+}
+
+void report_each_net_hpwl()
+{
+  dbDatabase *db = OpenRoad::openRoad()->getDb();
+  dbBlock *block = db->getChip()->getBlock();
+  odb::WireLengthEvaluator w(block);
+  w.reportEachNetHpwl(getLogger());
+}
+
+void report_hpwl()
+{
+  dbDatabase *db = OpenRoad::openRoad()->getDb();
+  dbBlock *block = db->getChip()->getBlock();
+  odb::WireLengthEvaluator w(block);
+  w.reportHpwl(getLogger());
+}
+
+void report_design_area_metrics_cmd()
+{
+  dbDatabase* db = OpenRoad::openRoad()->getDb();
+  odb::dbChip* chip = db->getChip();
+  if (chip == nullptr) {
+    return;
+  }
+  dbBlock* block = chip->getBlock();
+  odb::blockMetrics(block, getLogger());
+}
+
+} // namespace ord
 
 %} // inline

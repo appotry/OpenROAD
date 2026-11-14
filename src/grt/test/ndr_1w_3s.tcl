@@ -15,8 +15,8 @@ set block [[$db getChip] getBlock]
 set clk [$block findNet clk]
 
 create_ndr -name NDR \
-  	 	   	 -spacing { li1 0.51 met1 0.42 met2 0.42 met3 0.9 met4 0.9 met5 4.8 } \
-		   		 -width { li1 0.17 met1 0.14 met2 0.14 met3 0.3 met4 0.3 met5 1.6 }
+  -spacing { li1 0.51 met1 0.42 met2 0.42 met3 0.9 met4 0.9 met5 4.8 } \
+  -width { li1 0.17 met1 0.14 met2 0.14 met3 0.3 met4 0.3 met5 1.6 }
 
 assign_ndr -ndr NDR -net clk
 assign_ndr -ndr NDR -net clknet_0_clk
@@ -33,8 +33,8 @@ set_global_routing_layer_adjustment * 0.5
 
 set_routing_layers -signal met1-met5 -clock met3-met5
 
-global_route
+global_route -verbose
 
 write_guides $guide_file
 
-diff_file ndr_1w_3s.guideok $guide_file
+diff_files ndr_1w_3s.guideok $guide_file

@@ -1,162 +1,97 @@
-/////////////////////////////////////////////////////////////////////////////
-//
-// Copyright (c) 2019, OpenROAD
-// All rights reserved.
-//
-// BSD 3-Clause License
-//
-// Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions are met:
-//
-// * Redistributions of source code must retain the above copyright notice, this
-//   list of conditions and the following disclaimer.
-//
-// * Redistributions in binary form must reproduce the above copyright notice,
-//   this list of conditions and the following disclaimer in the documentation
-//   and/or other materials provided with the distribution.
-//
-// * Neither the name of the copyright holder nor the names of its
-//   contributors may be used to endorse or promote products derived from
-//   this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
-// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-// POSSIBILITY OF SUCH DAMAGE.
-//
-///////////////////////////////////////////////////////////////////////////////
+// SPDX-License-Identifier: BSD-3-Clause
+// Copyright (c) 2019-2025, The OpenROAD Authors
+
+// clang-format off
 
 %{
 
 #include <cstdint>
+#include <fstream>
 
 #include "sta/Liberty.hh"
+#include "sta/Parasitics.hh"
+#include "sta/Network.hh"
+#include "sta/Scene.hh"
+#include "odb/db.h"
 #include "rsz/Resizer.hh"
 #include "sta/Delay.hh"
-#include "sta/Liberty.hh"
+#include "db_sta/dbNetwork.hh"
+#include "Graphics.hh"
+#include "ord/OpenRoad.hh"
 
 namespace ord {
 // Defined in OpenRoad.i
 rsz::Resizer *
 getResizer();
+utl::Logger*
+getLogger();
 void
 ensureLinked();
 }
 
 namespace sta {
 
-// Defined in StaTcl.i
-LibertyCellSeq *
-tclListSeqLibertyCell(Tcl_Obj *const source,
-                      Tcl_Interp *interp);
-PinSet *
-tclListSetPin(Tcl_Obj *source,
-              Tcl_Interp *interp);
-
-typedef NetSeq TmpNetSeq;
-typedef PinSet TmpPinSet;
+// The aliases are created to attach different conversion rules:
+// TmpNetSeq, TmpPinSet pointers are freed when crossing into Tcl,
+// NetSeq, PinSet pointers are not
+using TmpNetSeq = NetSeq;
+using TmpPinSet = PinSet;
 
 } // namespace
 
 using ord::getResizer;
 using ord::ensureLinked;
 
-using sta::Corner;
+using sta::Scene;
 using sta::LibertyCellSeq;
 using sta::LibertyCell;
 using sta::Instance;
+using sta::InstanceSeq;
+using sta::InstanceSet;
 using sta::Net;
 using sta::NetSeq;
 using sta::Pin;
 using sta::PinSet;
 using sta::TmpPinSet;
 using sta::RiseFall;
-using sta::tclListSeqLibertyCell;
-using sta::tclListSetPin;
 using sta::TmpNetSeq;
 using sta::LibertyPort;
 using sta::Delay;
 using sta::Slew;
 using sta::dbNetwork;
+using sta::Network;
+using sta::stringEq;
 
 using rsz::Resizer;
-
 %}
+
+// OpenSTA swig files
+%include "tcl/StaTclTypes.i"
 
 ////////////////////////////////////////////////////////////////
 //
 // SWIG type definitions.
-// (copied from StaTcl.i because I don't see how to share them.
 //
 ////////////////////////////////////////////////////////////////
 
-%typemap(in) RiseFall* {
-  int length;
-  const char *arg = Tcl_GetStringFromObj($input, &length);
-  RiseFall *tr = RiseFall::find(arg);
-  if (tr == nullptr) {
-    Tcl_SetResult(interp,const_cast<char*>("Error: unknown transition name."),
-                  TCL_STATIC);
-    return TCL_ERROR;
-  }
-  $1 = tr;
-}
-
-%typemap(in) LibertyCellSeq* {
-  $1 = tclListSeqLibertyCell($input, interp);
-}
-
 %typemap(out) TmpNetSeq* {
-  Tcl_Obj *list = Tcl_NewListObj(0, nullptr);
   NetSeq *nets = $1;
-  NetSeq::Iterator net_iter(nets);
-  while (net_iter.hasNext()) {
-    Net *net = net_iter.next();
-    Tcl_Obj *obj = SWIG_NewInstanceObj(net, SWIGTYPE_p_Net, false);
-    Tcl_ListObjAppendElement(interp, list, obj);
-  }
+  seqPtrTclList<NetSeq, Net>(nets, SWIGTYPE_p_Net, interp);
   delete nets;
-  Tcl_SetObjResult(interp, list);
 }
 
-%typemap(out) NetSeq* {
-  Tcl_Obj *list = Tcl_NewListObj(0, nullptr);
-  NetSeq *nets = $1;
-  NetSeq::Iterator net_iter(nets);
-  while (net_iter.hasNext()) {
-    Net *net = net_iter.next();
-    Tcl_Obj *obj = SWIG_NewInstanceObj(net, SWIGTYPE_p_Net, false);
-    Tcl_ListObjAppendElement(interp, list, obj);
-  }
-  Tcl_SetObjResult(interp, list);
+%typemap(out) TmpPinSet* {
+  PinSet *pins = $1;
+  setPtrTclList<PinSet, Pin>(pins, SWIGTYPE_p_Pin, interp);
+  delete pins;
 }
 
-%typemap(out) LibertyPort* {
-  Tcl_Obj *obj = SWIG_NewInstanceObj($1, $1_descriptor, false);
-  Tcl_SetObjResult(interp, obj);
+%typemap(in) std::vector<rsz::MoveType> {
+  const char* str = Tcl_GetString($input);
+  $1 = Resizer::parseMoveSequence(std::string(str));
 }
 
-%typemap(in) PinSet* {
-  $1 = tclListSetPin($input, interp);
-}
 
-%typemap(out) PinSet {
-  Tcl_Obj *list = Tcl_NewListObj(0, nullptr);
-  PinSet::Iterator pin_iter($1);
-  while (pin_iter.hasNext()) {
-    Pin *pin = pin_iter.next();
-    Tcl_Obj *obj = SWIG_NewInstanceObj(pin, SWIGTYPE_p_Pin, false);
-    Tcl_ListObjAppendElement(interp, list, obj);
-  }
-  Tcl_SetObjResult(interp, list);
-}
 
 ////////////////////////////////////////////////////////////////
 //
@@ -165,125 +100,67 @@ using rsz::Resizer;
 ////////////////////////////////////////////////////////////////
 
 %include "../../Exception.i"
+%include "std_string.i"
 
 %inline %{
 
 namespace rsz {
 
 void
-set_layer_rc_cmd(odb::dbTechLayer *layer,
-                 const Corner *corner,
-                 float res,
-                 float cap)
+report_net_parasitic(Net *net)
 {
-  Resizer *resizer = getResizer();
-  resizer->setLayerRC(layer, corner, res, cap);
+  Scene *corner = sta::Sta::sta()->cmdScene();
+  auto parasitics = corner->parasitics(sta::MinMax::max());
+  auto parasitic = parasitics->findParasiticNetwork(net);
+  if (parasitic) {
+    parasitics->report(parasitic);
+  }
 }
 
-double
-layer_resistance(odb::dbTechLayer *layer,
-                 const Corner *corner)
+float
+sum_parasitic_network_resist(Net *net)
 {
-  Resizer *resizer = getResizer();
-  double res, cap;
-  resizer->layerRC(layer, corner, res, cap);
-  return res;
-}
-
-double
-layer_capacitance(odb::dbTechLayer *layer,
-                  const Corner *corner)
-{
-  Resizer *resizer = getResizer();
-  double res, cap;
-  resizer->layerRC(layer, corner, res, cap);
-  return cap;
-}
-
-void
-set_wire_signal_rc_cmd(const Corner *corner,
-                       float res,
-                       float cap)
-{
-  ensureLinked();
-  Resizer *resizer = getResizer();
-  resizer->setWireSignalRC(corner, res, cap);
+  Scene *corner = sta::Sta::sta()->cmdScene();
+  auto parasitics = corner->parasitics(sta::MinMax::max());
+  auto parasitic = parasitics->findParasiticNetwork(net);
+  if (parasitic) {
+    float ret = 0.0;
+    for (auto resist : parasitics->resistors(parasitic)) {
+      ret += parasitics->value(resist);
+    }
+    return ret;
+  } else {
+    return 0.0f;
+  }
 }
 
 void
-set_wire_clk_rc_cmd(const Corner *corner,
-                    float res,
-                    float cap)
+remove_buffers_cmd(InstanceSeq *insts)
 {
   ensureLinked();
   Resizer *resizer = getResizer();
-  resizer->setWireClkRC(corner, res, cap);
+  if (insts) {
+    resizer->removeBuffers(*insts);
+  } else {
+    resizer->removeBuffers({});
+  }
 }
 
-// ohms/meter
-double
-wire_signal_resistance(const Corner *corner)
+// Unbuffer net fully (for testing)
+void
+unbuffer_net_cmd(Net *net)
 {
   ensureLinked();
   Resizer *resizer = getResizer();
-  return resizer->wireSignalResistance(corner);
-}
-
-double
-wire_clk_resistance(const Corner *corner)
-{
-  ensureLinked();
-  Resizer *resizer = getResizer();
-  return resizer->wireClkResistance(corner);
-}
-
-// farads/meter
-double
-wire_signal_capacitance(const Corner *corner)
-{
-  ensureLinked();
-  Resizer *resizer = getResizer();
-  return resizer->wireSignalCapacitance(corner);
-}
-
-double
-wire_clk_capacitance(const Corner *corner)
-{
-  ensureLinked();
-  Resizer *resizer = getResizer();
-  return resizer->wireClkCapacitance(corner);
+  resizer->unbufferNet(net);
 }
 
 void
-estimate_parasitics_cmd()
+balance_row_usage_cmd()
 {
   ensureLinked();
   Resizer *resizer = getResizer();
-  resizer->estimateWireParasitics();
-}
-
-// For debugging. Does not protect against annotating power/gnd.
-void
-estimate_parasitic_net(const Net *net)
-{
-  ensureLinked();
-  Resizer *resizer = getResizer();
-  resizer->estimateWireParasitic(net);
-}
-
-bool
-have_estimated_parasitics()
-{
-  Resizer *resizer = getResizer();
-  return resizer->haveEstimatedParasitics();
-}
-
-void
-remove_buffers_cmd()
-{
-  ensureLinked();
-  Resizer *resizer = getResizer();
-  resizer->removeBuffers();
+  resizer->balanceRowUsage();
 }
 
 void
@@ -295,52 +172,76 @@ set_max_utilization(double max_utilization)
 }
 
 void
-set_dont_use_cmd(LibertyCellSeq *dont_use)
+set_dont_use(LibertyCell *lib_cell,
+             bool dont_use)
 {
-  ensureLinked();
   Resizer *resizer = getResizer();
-  resizer->setDontUse(dont_use);
-  delete dont_use;
+  resizer->setDontUse(lib_cell, dont_use);
 }
 
 void
-resizer_preamble()
+reset_dont_use()
 {
-  ensureLinked();
   Resizer *resizer = getResizer();
-  resizer->resizePreamble();
+  resizer->resetDontUse();
 }
 
 void
-buffer_inputs()
+set_dont_touch_instance(Instance *inst,
+                        bool dont_touch)
 {
   ensureLinked();
   Resizer *resizer = getResizer();
-  resizer->bufferInputs();
+  resizer->setDontTouch(inst, dont_touch);
 }
 
 void
-buffer_outputs()
+report_dont_use()
 {
   ensureLinked();
   Resizer *resizer = getResizer();
-  resizer->bufferOutputs();
+  resizer->reportDontUse();
 }
 
 void
-resize_to_target_slew()
+report_dont_touch()
 {
   ensureLinked();
   Resizer *resizer = getResizer();
-  resizer->resizeToTargetSlew();
+  resizer->reportDontTouch();
 }
 
 void
-resize_driver_to_target_slew(const Pin *drvr_pin)
+set_dont_touch_net(Net *net,
+                   bool dont_touch)
 {
   ensureLinked();
   Resizer *resizer = getResizer();
-  resizer->resizeToTargetSlew(drvr_pin);
+  resizer->setDontTouch(net, dont_touch);
+}
+
+void
+buffer_inputs(LibertyCell *buffer_cell, bool verbose)
+{
+  ensureLinked();
+  Resizer *resizer = getResizer();
+  resizer->bufferInputs(buffer_cell, verbose);
+}
+
+void
+buffer_outputs(LibertyCell *buffer_cell, bool verbose)
+{
+  ensureLinked();
+  Resizer *resizer = getResizer();
+  resizer->bufferOutputs(buffer_cell, verbose);
+}
+
+void
+resize_to_target_slew(const Pin *drvr_pin)
+{
+  ensureLinked();
+  Resizer *resizer = getResizer();
+  resizer->resizeDrvrToTargetSlew(drvr_pin);
 }
 
 double
@@ -375,6 +276,22 @@ find_floating_nets()
   return resizer->findFloatingNets();
 }
 
+TmpPinSet *
+find_floating_pins()
+{
+  ensureLinked();
+  Resizer *resizer = getResizer();
+  return resizer->findFloatingPins();
+}
+
+TmpNetSeq *
+find_overdriven_nets(bool include_parallel_driven)
+{
+  ensureLinked();
+  Resizer *resizer = getResizer();
+  return resizer->findOverdrivenNets(include_parallel_driven);
+}
+
 void
 repair_tie_fanout_cmd(LibertyPort *tie_port,
                       double separation, // meters
@@ -386,15 +303,34 @@ repair_tie_fanout_cmd(LibertyPort *tie_port,
 }
 
 void
-repair_design_cmd(float max_length)
+repair_design_cmd(double max_length,
+                  double slew_margin,
+                  double cap_margin,
+                  bool pre_placement,
+                  bool match_cell_footprint,
+                  bool reroute,
+                  bool verbose)
 {
   ensureLinked();
   Resizer *resizer = getResizer();
-  resizer->repairDesign(max_length);
+  resizer->repairDesign(max_length,
+                        slew_margin,
+                        cap_margin,
+                        pre_placement,
+                        match_cell_footprint,
+                        reroute,
+                        verbose);
+}
+
+int
+repair_design_buffer_count()
+{
+  Resizer *resizer = getResizer();
+  return resizer->repairDesignBufferCount();
 }
 
 void
-repair_clk_nets_cmd(float max_length)
+repair_clk_nets_cmd(double max_length)
 {
   ensureLinked();
   Resizer *resizer = getResizer();
@@ -411,23 +347,62 @@ repair_clk_inverters_cmd()
 
 void
 repair_net_cmd(Net *net,
-               float max_length)
+               double max_length,
+               double slew_margin,
+               double cap_margin)
 {
   ensureLinked();
   Resizer *resizer = getResizer();
-  resizer->repairNet(net, max_length); 
+  resizer->repairNet(net, max_length, slew_margin, cap_margin);
 }
 
-void
-repair_setup(float slack_margin)
+bool
+repair_setup(double setup_margin,
+             double repair_tns_end_percent,
+             int max_passes,
+             int max_iterations,
+             int max_repairs_per_pass,
+             bool match_cell_footprint,
+             bool verbose,
+             std::vector<rsz::MoveType> sequence,
+             const char* phases,
+             const char* path_group,
+             bool skip_pin_swap,
+             bool skip_gate_cloning,
+             bool skip_size_down_fanout,
+             bool skip_buffering,
+             bool skip_buffer_removal,
+             bool skip_buffer_to_inverters,
+             bool skip_last_gasp,
+             bool skip_vt_swap,
+             bool skip_crit_vt_swap,
+             const char* effort,
+             int profile_mode,
+             const char* profile_dir)
 {
   ensureLinked();
   Resizer *resizer = getResizer();
-  resizer->repairSetup(slack_margin);
+  return resizer->repairSetup(setup_margin, repair_tns_end_percent,
+                       max_passes, max_iterations,
+                       max_repairs_per_pass, match_cell_footprint,
+                       verbose, sequence, phases, path_group,
+                       skip_pin_swap, skip_gate_cloning,
+                       skip_size_down_fanout,
+                       skip_buffering, skip_buffer_removal, skip_buffer_to_inverters,
+                       skip_last_gasp, skip_vt_swap, skip_crit_vt_swap,
+                       resizer->repairEffortFromString(effort),
+                       profile_mode, profile_dir);
+}
+
+std::string
+resolve_path_group(const char* path_group)
+{
+  ensureLinked();
+  return getResizer()->resolvePathGroup(path_group);
 }
 
 void
-repair_setup_pin(Pin *end_pin)
+repair_setup_pin_cmd(Pin *end_pin)
 {
   ensureLinked();
   Resizer *resizer = getResizer();
@@ -435,34 +410,74 @@ repair_setup_pin(Pin *end_pin)
 }
 
 void
-repair_hold_pin(Pin *end_pin,
-                LibertyCell *buffer_cell,
-                bool allow_setup_violations)
+report_swappable_pins_cmd()
 {
   ensureLinked();
   Resizer *resizer = getResizer();
-  resizer->repairHold(end_pin, buffer_cell, 0.0, allow_setup_violations, 0.2);
+  resizer->reportSwappablePins();
+}
+
+bool
+repair_hold(double setup_margin,
+            double hold_margin,
+            bool allow_setup_violations,
+            float max_buffer_percent,
+            int max_passes,
+            int max_iterations,
+            bool match_cell_footprint,
+            bool verbose,
+            const char* path_group)
+{
+  ensureLinked();
+  Resizer *resizer = getResizer();
+  return resizer->repairHold(setup_margin, hold_margin,
+                      allow_setup_violations,
+                      max_buffer_percent, max_passes,
+                      max_iterations, match_cell_footprint,
+                      verbose, path_group);
 }
 
 void
-repair_hold(float slack_margin,
-            bool allow_setup_violations,
-            float max_buffer_percent)
+repair_hold_pin(Pin *end_pin,
+                double setup_margin,
+                double hold_margin,
+                bool allow_setup_violations,
+                float max_buffer_percent,
+                int max_passes)
 {
   ensureLinked();
   Resizer *resizer = getResizer();
-  resizer->repairHold(slack_margin, allow_setup_violations, max_buffer_percent);
+  resizer->repairHold(end_pin, setup_margin, hold_margin,
+                      allow_setup_violations,
+                      max_buffer_percent, max_passes);
+}
+
+int
+hold_buffer_count()
+{
+  Resizer *resizer = getResizer();
+  return resizer->holdBufferCount();
+}
+
+////////////////////////////////////////////////////////////////
+bool
+recover_power(float recover_power_percent, bool match_cell_footprint, bool verbose)
+{
+  ensureLinked();
+  Resizer *resizer = getResizer();
+  return resizer->recoverPower(recover_power_percent, match_cell_footprint, verbose);
 }
 
 ////////////////////////////////////////////////////////////////
 
-// for testing
+// Rebuffer one net (for testing).
+// resizerPreamble() required.
 void
-rebuffer_net(Net *net)
+rebuffer_net(const Pin *drvr_pin)
 {
   ensureLinked();
   Resizer *resizer = getResizer();
-  resizer->rebuffer(net);
+  resizer->rebufferNet(drvr_pin);
 }
 
 void
@@ -488,21 +503,23 @@ void
 find_resize_slacks()
 {
   Resizer *resizer = getResizer();
-  resizer->findResizeSlacks();
+  resizer->findResizeSlacks(true);
 }
 
-NetSeq *
+TmpNetSeq *
 resize_worst_slack_nets()
 {
   Resizer *resizer = getResizer();
-  return &resizer->resizeWorstSlackNets();
+  TmpNetSeq *seq = new TmpNetSeq;
+  *seq = resizer->resizeWorstSlackNets();
+  return seq;
 }
 
 float
 resize_net_slack(Net *net)
 {
   Resizer *resizer = getResizer();
-  return resizer->resizeNetSlack(net);
+  return resizer->resizeNetSlack(net).value();
 }
 
 ////////////////////////////////////////////////////////////////
@@ -530,32 +547,11 @@ find_max_wire_length()
 
 double
 find_buffer_max_wire_length(LibertyCell *buffer_cell,
-                            const Corner *corner)
+                            const Scene *corner)
 {
   ensureLinked();
   Resizer *resizer = getResizer();
   return resizer->findMaxWireLength(buffer_cell, corner);
-}
-
-double
-find_max_slew_wire_length(LibertyPort *drvr_port,
-                          LibertyPort *load_port,
-                          float max_slew,
-                          const Corner *corner)
-{
-  ensureLinked();
-  Resizer *resizer = getResizer();
-  return resizer->findMaxSlewWireLength(drvr_port, load_port, max_slew, corner);
-}
-
-double
-find_slew_load_cap(LibertyPort *drvr_port,
-                   float max_slew,
-                   const Corner *corner)
-{
-  ensureLinked();
-  Resizer *resizer = getResizer();
-  return resizer->findSlewLoadCap(drvr_port, max_slew, corner);
 }
 
 double
@@ -590,18 +586,290 @@ utilization()
   return resizer->utilization();
 }
 
-void
-highlight_steiner_tree(const Net *net)
+PinSet
+find_fanin_fanouts(PinSet* pins)
 {
   Resizer *resizer = getResizer();
-  resizer->highlightSteiner(net);
+  PinSet result = resizer->findFaninFanouts(*pins);
+  delete pins; // memory leak fix
+  return result;
 }
 
-PinSet
-find_fanin_fanouts(PinSet *pins)
+void
+set_debug_pin(const Pin *pin)
 {
   Resizer *resizer = getResizer();
-  return resizer->findFaninFanouts(pins);
+  resizer->setDebugPin(pin);
+}
+
+void
+set_worst_slack_nets_percent(float percent)
+{
+  Resizer *resizer = getResizer();
+  resizer->setWorstSlackNetsPercent(percent);
+}
+
+void
+eliminate_dead_logic_cmd(bool clean_nets)
+{
+  ensureLinked();
+  Resizer *resizer = getResizer();
+  resizer->eliminateDeadLogic(clean_nets);
+}
+
+void report_equiv_cells_cmd(LibertyCell* cell, bool match_cell_footprint,
+                            bool report_all_cells, bool report_vt_equiv)
+{
+  ensureLinked();
+  Resizer* resizer = getResizer();
+  resizer->reportEquivalentCells(cell, match_cell_footprint, report_all_cells,
+                                 report_vt_equiv);
+}
+
+void report_buffers_cmd(bool filtered)
+{
+  ensureLinked();
+  Resizer* resizer = getResizer();
+  resizer->reportBuffers(filtered);
+}
+
+void report_delay_estimator_accuracy_cmd(Instance* inst,
+                                         LibertyCell* replacement,
+                                         const char* estimator,
+                                         int delay_levels)
+{
+  ensureLinked();
+  Resizer* resizer = getResizer();
+  resizer->reportDelayEstimatorAccuracy(
+      inst, replacement, std::string(estimator), delay_levels);
+}
+
+void report_delay_estimator_accuracy_for_rebuffering_cmd(Instance* inst,
+                                                         Pin* driver_pin,
+                                                         int delay_levels)
+{
+  ensureLinked();
+  Resizer* resizer = getResizer();
+  resizer->reportDelayEstimatorAccuracyForRebufferTree(
+      inst, driver_pin, delay_levels);
+}
+
+bool is_valid_accuracy_estimator_cmd(const char* name)
+{
+  return Resizer::isValidDelayEstimatorName(std::string(name));
+}
+
+const char* accuracy_estimator_names_cmd()
+{
+  static const std::string names = []() {
+    return Resizer::delayEstimatorNames();
+  }();
+  return names.c_str();
+}
+
+void
+report_fast_buffer_sizes()
+{
+  Resizer *resizer = getResizer();
+  resizer->reportFastBufferSizes();
+}
+
+void set_debug_cmd(const char* net_name,
+                   const bool subdivide_step)
+{
+  Resizer* resizer = getResizer();
+
+  odb::dbNet* net = nullptr;
+  if (net_name) {
+    auto block = ord::OpenRoad::openRoad()->getDb()->getChip()->getBlock();
+    net = block->findNet(net_name);
+  }
+
+  auto graphics = std::make_shared<Graphics>();
+  graphics->setNet(net);
+  graphics->stopOnSubdivideStep(subdivide_step);
+  resizer->setDebugGraphics(std::move(graphics));
+}
+
+void swap_arith_modules_cmd(int path_count,
+                            const std::string& target,
+                            float slack_margin)
+{
+  Resizer* resizer = getResizer();
+  resizer->swapArithModules(path_count, target, slack_margin);
+}
+
+// Test stub
+void
+fully_rebuffer(Pin *pin)
+{
+  ensureLinked();
+  Resizer *resizer = getResizer();
+  resizer->resizeSlackPreamble();
+  resizer->fullyRebuffer(pin);
+}
+
+Instance*
+insert_buffer_after_driver_cmd(Net *net,
+                              LibertyCell *buffer_cell,
+                              double x, double y,
+                              bool has_loc,
+                              const char *new_buf_base_name,
+                              const char *new_net_base_name)
+{
+  ensureLinked();
+  Resizer *resizer = getResizer();
+  resizer->initBlock();
+  est::IncrementalParasiticsGuard guard(resizer->getEstimateParasitics());
+
+  Instance* inst = nullptr;
+  const char* buf_name = (new_buf_base_name && strcmp(new_buf_base_name, "NULL") != 0) ? new_buf_base_name : nullptr;
+  const char* net_name = (new_net_base_name && strcmp(new_net_base_name, "NULL") != 0) ? new_net_base_name : nullptr;
+
+  if (has_loc) {
+    odb::Point loc(resizer->metersToDbu(x), resizer->metersToDbu(y));
+    inst = resizer->insertBufferAfterDriver(net, buffer_cell, &loc, buf_name, net_name, odb::dbNameUniquifyType::ALWAYS);
+  } else {
+    inst = resizer->insertBufferAfterDriver(net, buffer_cell, nullptr, buf_name, net_name, odb::dbNameUniquifyType::ALWAYS);
+  }
+  return inst;
+}
+
+Instance*
+insert_buffer_before_load_cmd(Pin *load_pin,
+                             LibertyCell *buffer_cell,
+                             double x, double y,
+                             bool has_loc,
+                             const char *new_buf_base_name,
+                             const char *new_net_base_name)
+{
+  ensureLinked();
+  Resizer *resizer = getResizer();
+  resizer->initBlock();
+  est::IncrementalParasiticsGuard guard(resizer->getEstimateParasitics());
+
+  Instance* inst = nullptr;
+  const char* buf_name = (new_buf_base_name && strcmp(new_buf_base_name, "NULL") != 0) ? new_buf_base_name : nullptr;
+  const char* net_name = (new_net_base_name && strcmp(new_net_base_name, "NULL") != 0) ? new_net_base_name : nullptr;
+
+  if (has_loc) {
+    odb::Point loc(resizer->metersToDbu(x), resizer->metersToDbu(y));
+    inst = resizer->insertBufferBeforeLoad(load_pin, buffer_cell, &loc, buf_name, net_name, odb::dbNameUniquifyType::ALWAYS);
+  } else {
+    inst = resizer->insertBufferBeforeLoad(load_pin, buffer_cell, nullptr, buf_name, net_name, odb::dbNameUniquifyType::ALWAYS);
+  }
+  return inst;
+}
+
+Instance*
+insert_buffer_before_loads_cmd(Net *net,
+                              PinSet *pins,
+                              LibertyCell *buffer_cell,
+                              double x, double y,
+                              bool has_loc,
+                              const char *new_buf_base_name,
+                              const char *new_net_base_name,
+                              bool loads_on_diff_nets)
+{
+  ensureLinked();
+  Resizer *resizer = getResizer();
+  resizer->initBlock();
+  est::IncrementalParasiticsGuard guard(resizer->getEstimateParasitics());
+  
+  Instance* inst = nullptr;
+  const char* buf_name = (new_buf_base_name && strcmp(new_buf_base_name, "NULL") != 0) ? new_buf_base_name : nullptr;
+  const char* net_name = (new_net_base_name && strcmp(new_net_base_name, "NULL") != 0) ? new_net_base_name : nullptr;
+
+  if (has_loc) {
+    odb::Point loc(resizer->metersToDbu(x), resizer->metersToDbu(y));
+    inst = resizer->insertBufferBeforeLoads(net, pins, buffer_cell, &loc, buf_name, net_name, odb::dbNameUniquifyType::ALWAYS, loads_on_diff_nets);
+  } else {
+    inst = resizer->insertBufferBeforeLoads(net, pins, buffer_cell, nullptr, buf_name, net_name, odb::dbNameUniquifyType::ALWAYS, loads_on_diff_nets);
+  }
+
+  delete pins;
+  return inst;
+}
+
+void
+set_clock_buffer_string_cmd(const char* clk_str)
+{
+  ensureLinked();
+  Resizer *resizer = getResizer();
+  resizer->setClockBufferString(clk_str);
+}
+
+void
+set_clock_buffer_footprint_cmd(const char* footprint)
+{
+  ensureLinked();
+  Resizer *resizer = getResizer();
+  resizer->setClockBufferFootprint(footprint);
+}
+
+void
+reset_clock_buffer_pattern_cmd()
+{
+  ensureLinked();
+  Resizer *resizer = getResizer();
+  resizer->resetClockBufferPattern();
+}
+
+bool
+has_clock_buffer_string_cmd()
+{
+  Resizer *resizer = getResizer();
+  return resizer->hasClockBufferString();
+}
+
+bool
+has_clock_buffer_footprint_cmd()
+{
+  Resizer *resizer = getResizer();
+  return resizer->hasClockBufferFootprint();
+}
+
+const char*
+get_clock_buffer_string_cmd()
+{
+  Resizer *resizer = getResizer();
+  return resizer->getClockBufferString().c_str();
+}
+
+const char*
+get_clock_buffer_footprint_cmd()
+{
+  Resizer *resizer = getResizer();
+  return resizer->getClockBufferFootprint().c_str();
+}
+
+void check_slew_after_buffer_rm(Pin *drvr_pin, Instance *buffer_instance, const Scene *corner)
+{
+  ensureLinked();
+  Resizer *resizer = getResizer();
+  std::map<const Pin*, float> load_pin_slew;
+  
+  ArcDelay old_delay[RiseFall::index_count];
+  ArcDelay new_delay[RiseFall::index_count];
+  Slew old_drvr_slew[RiseFall::index_count];
+  Slew new_drvr_slew[RiseFall::index_count];
+  float old_cap, new_cap;
+  resizer->resizeSlackPreamble();
+  if (!resizer->computeNewDelaysSlews(drvr_pin,
+                                      buffer_instance,
+                                      corner,
+                                      old_delay,
+                                      new_delay,
+                                      old_drvr_slew,
+                                      new_drvr_slew,
+                                      old_cap,
+                                      new_cap)) {  
+    return;
+  }
+  (void) resizer->estimateSlewsAfterBufferRemoval
+    (drvr_pin, buffer_instance, std::max(new_drvr_slew[RiseFall::riseIndex()],
+                                         new_drvr_slew[RiseFall::fallIndex()]),
+     corner, load_pin_slew);
 }
 
 } // namespace

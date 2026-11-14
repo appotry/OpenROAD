@@ -1,84 +1,45 @@
-[INFO ODB-0222] Reading LEF file: sky130hd/sky130hd.tlef
-[INFO ODB-0223]     Created 13 technology layers
-[INFO ODB-0224]     Created 25 technology vias
-[INFO ODB-0226] Finished LEF file:  sky130hd/sky130hd.tlef
-[INFO ODB-0222] Reading LEF file: sky130hd/sky130hd_std_cell.lef
-[INFO ODB-0225]     Created 437 library cells
-[INFO ODB-0226] Finished LEF file:  sky130hd/sky130hd_std_cell.lef
-[INFO ODB-0127] Reading DEF file: repair_hold10.def
+[INFO ODB-0227] LEF file: sky130hd/sky130hd.tlef, created 13 layers, 25 vias
+[INFO ODB-0227] LEF file: sky130hd/sky130hd_std_cell.lef, created 437 library cells
 [INFO ODB-0128] Design: top
 [INFO ODB-0130]     Created 1 pins.
 [INFO ODB-0131]     Created 15 components and 68 component-terminals.
 [INFO ODB-0133]     Created 13 nets and 29 connections.
-[INFO ODB-0134] Finished DEF file: repair_hold10.def
-Min routing layer: met1
-Max routing layer: met5
-Global adjustment: 0%
-Grid origin: (0, 0)
-[INFO GRT-0003] Macros: 0
-[INFO GRT-0004] Blockages: 349
-[INFO GRT-0017] Found 8 clock nets.
-[INFO GRT-0001] Minimum degree: 2
-[INFO GRT-0002] Maximum degree: 4
-[INFO GRT-0018] Processing 483 blockages on layer li1.
-[INFO GRT-0019] Processing 86 blockages on layer met1.
-[INFO GRT-0146] Final usage/overflow report:
-[INFO GRT-0155] Overflow Report:
-[INFO GRT-0156] Total Usage   : 977
-[INFO GRT-0157] Total Capacity: 277312
-[INFO GRT-0158] Max H Overflow: 0
-[INFO GRT-0159] Max V Overflow: 0
-[INFO GRT-0160] Max Overflow  : 0
-[INFO GRT-0161] H   Overflow  : 0
-[INFO GRT-0162] V   Overflow  : 0
-[INFO GRT-0163] Final Overflow: 0
-
-[INFO GRT-0110] Final usage: 977
-[INFO GRT-0111] Final number of vias: 54
-[INFO GRT-0112] Final usage 3D: 1139
-[WARNING GRT-0211] dbGcellGrid already exists in db. Clearing existing dbGCellGrid
-[INFO GRT-0018] Total wirelength: 6927 um
-worst slack -1.95
-[WARNING RSZ-0021] no estimated parasitics. Using wire load models.
-[INFO RSZ-0059] Using sky130_fd_sc_hd__dlygate4sd3_1 with 0.553ns delay for hold repairs.
+worst slack min -3.24
 [INFO RSZ-0046] Found 2 endpoints with hold violations.
-[INFO RSZ-0032] Inserted 1 hold buffers.
-worst slack 0.29
-[WARNING DPL-0011] Could not find power special net.
-Placement Analysis
+Iteration | Resized | Buffers | Cloned Gates |   Area   |   WNS   |   TNS   | Endpoint
+--------------------------------------------------------------------------------------
+        0 |       0 |       0 |            0 |    +0.0% |  -3.236 |  -6.203 | r3/D
+    final |       0 |       6 |            0 |   +40.0% |   0.114 |   0.000 | r3/D
+--------------------------------------------------------------------------------------
+[INFO RSZ-0032] Inserted 6 hold buffers.
+Repair timing output passed/skipped equivalence test
+worst slack min 0.11
+[INFO DPL-0006] Core area: 231206.75 um^2
+[INFO DPL-0007] Movable instances area: 210.20 um^2
+[INFO DPL-0008] Fixed instances area within core: 0.00 um^2
+[INFO DPL-0009] Utilization: 0.1%
+[INFO DPL-0005] Diamond search max displacement: +/- 500 sites horizontally, +/- 100 rows vertically.
+[INFO DPL-1102] Legalizing using negotiation legalizer.
+[INFO DPL-1103] Negotiation base search window: +/-20 sites horizontally, +/-5 rows vertically 
+	Automatic search window extension enabled.
+	Search window extendable up to the max displacement cap of +/-500 sites, +/-100 rows near walls.
+[INFO DPL-1104] NegotiationLegalizer DRC penalty: 5.
+[INFO DPL-0392] Negotiation cell height distribution (1 unique row-count(s)):
+[INFO DPL-0393]   height 1 row(s): 21 cells
+          |      Total |  Illegal |  Illegal
+Iteration | Violations |    Cells |    Sites
+---------------------------------------------
+        0 |          0 |         0 |         0
+Negotiation phase 1 converged at iteration 0.
+Detailed Placement Analysis
 ---------------------------------
-total displacement          5.3 u
-average displacement        0.3 u
+legalizer            negotiation
+total moves                   5
+total displacement         25.0 u
+average displacement        1.2 u
 max displacement            3.2 u
-original HPWL            6757.8 u
-legalized HPWL           6764.9 u
+original HPWL            6886.7 u
+legalized HPWL           6887.7 u
 delta HPWL                    0 %
 
-Min routing layer: met1
-Max routing layer: met5
-Global adjustment: 0%
-Grid origin: (0, 0)
-[INFO GRT-0003] Macros: 0
-[INFO GRT-0004] Blockages: 364
-[INFO GRT-0017] Found 8 clock nets.
-[INFO GRT-0001] Minimum degree: 2
-[INFO GRT-0002] Maximum degree: 4
-[INFO GRT-0018] Processing 508 blockages on layer li1.
-[INFO GRT-0019] Processing 88 blockages on layer met1.
-[INFO GRT-0146] Final usage/overflow report:
-[INFO GRT-0155] Overflow Report:
-[INFO GRT-0156] Total Usage   : 978
-[INFO GRT-0157] Total Capacity: 277310
-[INFO GRT-0158] Max H Overflow: 0
-[INFO GRT-0159] Max V Overflow: 0
-[INFO GRT-0160] Max Overflow  : 0
-[INFO GRT-0161] H   Overflow  : 0
-[INFO GRT-0162] V   Overflow  : 0
-[INFO GRT-0163] Final Overflow: 0
-
-[INFO GRT-0110] Final usage: 978
-[INFO GRT-0111] Final number of vias: 56
-[INFO GRT-0112] Final usage 3D: 1146
-[WARNING GRT-0211] dbGcellGrid already exists in db. Clearing existing dbGCellGrid
-[INFO GRT-0018] Total wirelength: 6941 um
-worst slack -1.40
+worst slack min 0.12

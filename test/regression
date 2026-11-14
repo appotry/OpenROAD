@@ -2,7 +2,8 @@
 # The next line is executed by /bin/sh, but not Tcl \
 exec tclsh $0 ${1+"$@"}
 
-# Copyright (c) 2019, Parallax Software, Inc.
+# Copied from OpenSTA/test/regression
+# Copyright (c) 2021, Parallax Software, Inc.
 # 
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -24,51 +25,23 @@ exec tclsh $0 ${1+"$@"}
 set test_dir [file dirname [file normalize [info script]]]
 set openroad_dir [file dirname $test_dir]
 
+# Parse -threads if present
+if { [set idx [lsearch $argv "-threads"]] != -1 } {
+  set threads [lindex $argv [expr $idx + 1]]
+  set argv [lreplace $argv $idx [expr $idx + 1]]
+}
+
 source [file join $test_dir "regression.tcl"]
 source [file join $test_dir "regression_tests.tcl"]
+
+if { [info exists threads] } {
+  lappend app_options "-threads" $threads
+}
+
 
 proc define_tool_script { tool script } {
   global tool_scripts
   dict set tool_scripts [string tolower $tool] $script
-}
-
-define_tool_script "ifp" "src/ifp/test/regression"
-define_tool_script "dbSta" "src/dbSta/test/regression"
-define_tool_script "ppl" "src/ppl/test/regression"
-define_tool_script "PDNgen" "src/pdngen/test/regression"
-define_tool_script "ICeWall" "src/ICeWall/test/regression"
-define_tool_script "mpl" "src/mpl/test/regression"
-define_tool_script "rsz" "src/rsz/test/regression"
-define_tool_script "Replace" "src/replace/test/regression"
-define_tool_script "TritonCTS" "src/TritonCTS/test/regression"
-define_tool_script "dpl" "src/dpl/test/regression"
-define_tool_script "psm" "src/psm/test/regression"
-define_tool_script "grt" "src/grt/test/regression"
-define_tool_script "tap" "src/tap/test/regression"
-define_tool_script "ant" "src/ant/test/regression"
-define_tool_script "OpenDB" "src/OpenDB/test/regression"
-define_tool_script "rcx" "src/rcx/test/regression"
-define_tool_script "PartitionMgr" "src/PartitionMgr/test/regression"
-define_tool_script "TritonRoute" "src/TritonRoute/test/regression"
-
-proc run_openroad_tests { } {
-  global tool_errors
-
-  puts "------------------------------------------------------"
-  puts "OpenROAD"
-  # Skip flow tests until triton route is installed on CI machines
-  incr tool_errors [regression_body "non_flow"]
-}
-
-proc run_tool_tests { tool } {
-  global tool_errors openroad_dir tool_scripts
-
-  puts "------------------------------------------------------"
-  puts $tool
-  set script [dict get $tool_scripts $tool]
-  if { [catch "exec [file join $openroad_dir $script] >@stdout"] } {
-    incr tool_errors
-  }
 }
 
 proc run_flow_tests { } {
@@ -88,20 +61,11 @@ set tool_errors 0
 
 if { $argv == {} } {
   # Run all tool Unit tests
-  dict for {tool script} $tool_scripts {
-    run_tool_tests $tool
-  }
-  run_openroad_tests
+  puts "Nothing specified"
 } else {
   foreach arg $argv {
     set arg [string tolower $arg]
     set matched 0
-    # openroad
-    if { [string equal -nocase $arg "openroad"] } {
-      run_openroad_tests
-      set matched 1
-    }
-
     # flow
     if { [string equal -nocase $arg "flow"] } {
       run_flow_tests
@@ -118,14 +82,6 @@ if { $argv == {} } {
     }
     if { $ord_tests != {} } {
       incr tool_errors [regression_body $ord_tests]
-    }
-
-    # <tool>
-    dict for {tool script} $tool_scripts {
-      if { [string match -nocase $arg $tool] } {
-	run_tool_tests $tool
-	set matched 1
-      }
     }
 
     if { !$matched } {

@@ -1,219 +1,179 @@
-/*
-BSD 3-Clause License
+// SPDX-License-Identifier: BSD-3-Clause
+// Copyright (c) 2024-2025, The OpenROAD Authors
 
-Copyright (c) 2020, The Regents of the University of Minnesota
-
-All rights reserved.
-
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions are met:
-
-* Redistributions of source code must retain the above copyright notice, this
-  list of conditions and the following disclaimer.
-
-* Redistributions in binary form must reproduce the above copyright notice,
-  this list of conditions and the following disclaimer in the documentation
-  and/or other materials provided with the distribution.
-
-* Neither the name of the copyright holder nor the names of its
-  contributors may be used to endorse or promote products derived from
-  this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-*/
-
-#include <vector>
-#include <iostream>
 #include "node.h"
+
+#include <algorithm>
+#include <memory>
+#include <string>
+
+#include "odb/db.h"
+#include "odb/geom.h"
+#include "shape.h"
 
 namespace psm {
 
-using std::make_pair;
-using std::max;
-using std::pair;
-using std::vector;
-
-//! Get the layer number of the node
-/*
- * \return Layer number of the node
- * */
-int Node::GetLayerNum()
+Node::Node(const odb::Point& pt, odb::dbTechLayer* layer)
+    : pt_(pt), layer_(layer)
 {
-  return m_layer;
 }
 
-//! Set the layer number of the node
-/*
- \param t_layer Layer number
-*/
-void Node::SetLayerNum(int t_layer)
+int Node::compare(const Node* other) const
 {
-  m_layer = t_layer;
+  if (other == nullptr) {
+    return 1;
+  }
+
+  // Compare layer
+  const int layer1 = layer_->getNumber();
+  const int layer2 = other->layer_->getNumber();
+  if (layer1 != layer2) {
+    return layer1 < layer2 ? -1 : 1;
+  }
+
+  // Compare x coordinate
+  const int x1 = pt_.getX();
+  const int x2 = other->pt_.getX();
+  if (x1 != x2) {
+    return x1 < x2 ? -1 : 1;
+  }
+
+  // Compare y coordinate
+  const int y1 = pt_.getY();
+  const int y2 = other->pt_.getY();
+  if (y1 != y2) {
+    return y1 < y2 ? -1 : 1;
+  }
+
+  // Compare node type
+  const NodeType type1 = getType();
+  const NodeType type2 = other->getType();
+  if (type1 != type2) {
+    return type1 < type2 ? -1 : 1;
+  }
+
+  // Compare type-specific info
+  const int info1 = getTypeCompareInfo();
+  const int info2 = other->getTypeCompareInfo();
+  if (info1 == info2) {
+    return 0;
+  }
+  return info1 < info2 ? -1 : 1;
 }
 
-//! Get the location of the node
-/*
- * \return NodeLoc which is x and y index
- * */
-NodeLoc Node::GetLoc()
+int Node::compare(const std::unique_ptr<Node>& other) const
 {
-  return m_loc;
+  return compare(other.get());
 }
 
-//! Set the location of the node using x and y coordinates
-/*
- * \param t_x x index
- * \param t_y y index
- * */
-void Node::SetLoc(int t_x, int t_y)
+std::string Node::describe(const std::string& prefix) const
 {
-  m_loc = make_pair(t_x, t_y);
+  const double dbus = getDBUs();
+
+  return fmt::format("{}{}: ({:.4f}, {:.4f}) on {}",
+                     prefix,
+                     getTypeName(),
+                     pt_.getX() / dbus,
+                     pt_.getY() / dbus,
+                     layer_->getName());
 }
 
-//! Set the location of the node using x,y and layer information
-/*
- * \param t_x x index
- * \param t_y y index
- * \param t_l Layer number
- * */
-void Node::SetLoc(int t_x, int t_y, int t_l)
+double Node::getDBUs() const
 {
-  SetLayerNum(t_l);
-  SetLoc(t_x, t_y);
+  return layer_->getTech()->getDbUnitsPerMicron();
 }
 
-//! Get location of the node in G matrix
-/*
- * \return Location in G matrix
- */
-NodeIdx Node::GetGLoc()
+void Node::print(utl::Logger* logger, const std::string& prefix) const
 {
-  return m_node_loc;
+  logger->report(describe(prefix));
 }
 
-//! Set location of the node in G matrix
-/*
- * \param t_loc Location in the G matrix
- */
-void Node::SetGLoc(NodeIdx t_loc)
+std::string Node::getName() const
 {
-  m_node_loc = t_loc;
+  std::string type = getTypeName();
+
+  std::erase(type, ' ');
+
+  return fmt::format(
+      "{}_{}_{}_{}", type, layer_->getName(), pt_.getX(), pt_.getY());
 }
 
-//! Function to print node details
-void Node::Print(utl::Logger* logger)
+std::string Node::getTypeName() const
 {
-  logger->report("Node: {}", m_node_loc);
-  logger->report(
-      "  Location: Layer {}, x {}, y {}", m_layer, m_loc.first, m_loc.second);
-  logger->report("  Bounding box: x {}, y {} ", m_bBox.first, m_bBox.second);
-  logger->report("  Current: {:5.4e}A", m_current_src);
-  logger->report("  Voltage: {:5.4e}V", m_voltage);
-  logger->report("  Has connection: {}", m_connected ? "true" : "false");
-  logger->report("  Has instances:  {}", m_has_instances ? "true" : "false");
+  switch (getType()) {
+    case NodeType::kNode:
+      return "Node";
+    case NodeType::kSource:
+      return "Source Node";
+    case NodeType::kITerm:
+      return "ITerm Node";
+    case NodeType::kBPin:
+      return "BPin Node";
+    case NodeType::kUnknown:
+      return "Unknown";
+  }
+
+  return "unknown";
 }
 
-//! Function to set the bounding box of the stripe
-void Node::SetBbox(int t_dX, int t_dY)
+///////////////////
+
+TerminalNode::TerminalNode(const odb::Rect& shape, odb::dbTechLayer* layer)
+    : Node(odb::Point(shape.center()), layer), shape_(shape)
 {
-  m_bBox = make_pair(t_dX, t_dY);
 }
 
-//! Function to get the bounding box of the stripe
-BBox Node::GetBbox()
+///////////////////
+
+SourceNode::SourceNode(Node* node)
+    : Node(node->getPoint(), node->getLayer()), source_(node)
 {
-  return m_bBox;
 }
 
-//! Function to update the stripe
-/*
- * \param t_dX Change in the x value
- * \param t_dY Change in the y value
- * \return nothing
- */
-void Node::UpdateMaxBbox(int t_dX, int t_dY)
+////////////////////
+
+ITermNode::ITermNode(odb::dbITerm* iterm,
+                     const odb::Point& pt,
+                     odb::dbTechLayer* layer)
+    : TerminalNode({pt, pt}, layer), iterm_(iterm)
 {
-  BBox nodeBbox = m_bBox;
-  int  DX       = max(nodeBbox.first, t_dX);
-  int  DY       = max(nodeBbox.second, t_dY);
-  SetBbox(DX, DY);
 }
 
-//! Function to set the current value at a particular node
-/*
- * \param t_current Current magnitude
- */
-void Node::SetCurrent(double t_current)
+int ITermNode::getTypeCompareInfo() const
 {
-  m_current_src = t_current;
+  return iterm_->getId();
 }
 
-//! Function to get the value of current at a node
-double Node::GetCurrent()
+std::string ITermNode::describe(const std::string& prefix) const
 {
-  return m_current_src;
+  return TerminalNode::describe(prefix) + ": " + iterm_->getName();
 }
 
-//! Function to add the current source
-/*
- * \param t_current Value of current source
- */
-void Node::AddCurrentSrc(double t_current)
+////////////////////
+
+BPinNode::BPinNode(odb::dbBPin* pin, odb::dbBox* box, odb::dbTechLayer* layer)
+    : TerminalNode(box->getBox(), layer), pin_(pin), box_(box)
 {
-  double node_cur = GetCurrent();
-  SetCurrent(node_cur + t_current);
 }
 
-//! Function to set the value of the voltage source
-/*
- * \param t_voltage Voltage source magnitude
- * */
-void Node::SetVoltage(double t_voltage)
+int BPinNode::getTypeCompareInfo() const
 {
-  m_voltage = t_voltage;
+  return pin_->getId();
 }
 
-//! Function to get the value of the voltage source
-/*
- * \return Voltage value at the node
- */
-double Node::GetVoltage()
+bool BPinNode::shouldConnect() const
 {
-  return m_voltage;
+  if (auto prop = odb::dbBoolProperty::find(pin_, kDisconnectProperty)) {
+    if (prop != nullptr && prop->getValue()) {
+      return false;
+    }
+  }
+  if (auto prop = odb::dbBoolProperty::find(box_, kDisconnectProperty)) {
+    if (prop != nullptr && prop->getValue()) {
+      return false;
+    }
+  }
+  return true;
 }
 
-bool Node::GetConnected()
-{
-  return m_connected;
-}
-
-void Node::SetConnected()
-{
-  m_connected = true;
-}
-
-bool Node::HasInstances()
-{
-  return m_has_instances;
-}
-
-vector<dbInst*> Node::GetInstances()
-{
-  return m_connected_instances;
-}
-
-void Node::AddInstance(dbInst* inst)
-{
-  m_has_instances = true;
-  m_connected_instances.push_back(inst);
-}
 }  // namespace psm

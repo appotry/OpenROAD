@@ -1,15 +1,9 @@
-[INFO ODB-0222] Reading LEF file: Nangate45/Nangate45.lef
-[INFO ODB-0223]     Created 22 technology layers
-[INFO ODB-0224]     Created 27 technology vias
-[INFO ODB-0225]     Created 134 library cells
-[INFO ODB-0226] Finished LEF file:  Nangate45/Nangate45.lef
-[INFO ODB-0127] Reading DEF file: repair_setup1.def
+[INFO ODB-0227] LEF file: Nangate45/Nangate45.lef, created 22 layers, 27 vias, 135 library cells
 [INFO ODB-0128] Design: reg1
 [INFO ODB-0130]     Created 1 pins.
 [INFO ODB-0131]     Created 17 components and 92 component-terminals.
 [INFO ODB-0132]     Created 2 special nets and 34 connections.
 [INFO ODB-0133]     Created 7 nets and 30 connections.
-[INFO ODB-0134] Finished DEF file: repair_setup1.def
 Startpoint: r1 (rising edge-triggered flip-flop clocked by clk)
 Endpoint: r2 (rising edge-triggered flip-flop clocked by clk)
 Path Group: clk
@@ -20,36 +14,46 @@ Path Type: max
    0.000    0.000   clock clk (rise edge)
    0.000    0.000   clock network delay (ideal)
    0.000    0.000 ^ r1/CK (DFF_X1)
-   0.194    0.194 ^ r1/Q (DFF_X1)
-   0.023    0.217 ^ u1/A (BUF_X1)
-   0.047    0.264 ^ u1/Z (BUF_X1)
-   0.001    0.265 ^ u2/A (BUF_X1)
-   0.036    0.301 ^ u2/Z (BUF_X1)
-   0.001    0.302 ^ u3/A (BUF_X1)
-   0.036    0.338 ^ u3/Z (BUF_X1)
-   0.001    0.339 ^ u4/A (BUF_X1)
-   0.036    0.375 ^ u4/Z (BUF_X1)
-   0.001    0.376 ^ u5/A (BUF_X1)
-   0.094    0.470 ^ u5/Z (BUF_X1)
-   0.045    0.515 ^ r2/D (DFF_X1)
-            0.515   data arrival time
+   0.206    0.206 ^ r1/Q (DFF_X1)
+   0.029    0.235 ^ u1/A (BUF_X1)
+   0.052    0.287 ^ u1/Z (BUF_X1)
+   0.002    0.289 ^ u2/A (BUF_X1)
+   0.042    0.331 ^ u2/Z (BUF_X1)
+   0.002    0.333 ^ u3/A (BUF_X1)
+   0.042    0.375 ^ u3/Z (BUF_X1)
+   0.002    0.377 ^ u4/A (BUF_X1)
+   0.042    0.419 ^ u4/Z (BUF_X1)
+   0.002    0.420 ^ u5/A (BUF_X1)
+   0.116    0.536 ^ u5/Z (BUF_X1)
+   0.049    0.585 ^ r2/D (DFF_X1)
+            0.585   data arrival time
 
    0.300    0.300   clock clk (rise edge)
    0.000    0.300   clock network delay (ideal)
    0.000    0.300   clock reconvergence pessimism
             0.300 ^ r2/CK (DFF_X1)
-  -0.046    0.254   library setup time
-            0.254   data required time
+  -0.048    0.252   library setup time
+            0.252   data required time
 -----------------------------------------------------------
-            0.254   data required time
-           -0.515   data arrival time
+            0.252   data required time
+           -0.585   data arrival time
 -----------------------------------------------------------
-           -0.261   slack (VIOLATED)
+           -0.333   slack (VIOLATED)
 
 
-[INFO RSZ-0040] Inserted 14 buffers.
-[INFO RSZ-0041] Resized 19 instances.
-[WARNING RSZ-0062] Unable to repair all setup violations.
+[INFO RSZ-0100] Repair move sequence: UnbufferMove SizeUpMove SwapPinsMove BufferMove CloneMove SplitLoadMove 
+[INFO RSZ-0094] Found 4 endpoints with setup violations.
+[INFO RSZ-0099] Repairing 4 out of 4 (100.00%) violating endpoints...
+   Iter   | Removed | Resized | Inserted | Cloned |  Pin  |   Area   |    WNS   |    TNS     |  Viol  |  Worst
+          | Buffers |  Gates  | Buffers  |  Gates | Swaps |          |          |            | Endpts | Endpoint
+------------------------------------------------------------------------------------------------------------------------------
+       0* |       0 |       0 |        0 |      0 |     0 |    +0.0% |   -0.333 |       -0.4 |      4 | r2/D
+       9* |       4 |       1 |        0 |      0 |     0 |    -4.6% |    0.013 |        0.0 |      4 | r2/D
+    final |       4 |       1 |        0 |      0 |     0 |    -4.6% |    0.013 |        0.0 |      0 | r2/D
+------------------------------------------------------------------------------------------------------------------------------
+[INFO RSZ-0059] Removed 4 buffers.
+[INFO RSZ-0051] Resized 1 instances: 1 up, 0 up match, 0 down, 0 VT
+Repair timing output passed/skipped equivalence test
 Startpoint: r1 (rising edge-triggered flip-flop clocked by clk)
 Endpoint: r2 (rising edge-triggered flip-flop clocked by clk)
 Path Group: clk
@@ -59,31 +63,23 @@ Path Type: max
 -----------------------------------------------------------
    0.000    0.000   clock clk (rise edge)
    0.000    0.000   clock network delay (ideal)
-   0.000    0.000 ^ r1/CK (DFF_X1)
-   0.086    0.086 v r1/Q (DFF_X1)
-   0.000    0.087 v u1/A (BUF_X4)
-   0.026    0.112 v u1/Z (BUF_X4)
-   0.002    0.114 v u2/A (BUF_X4)
-   0.023    0.138 v u2/Z (BUF_X4)
-   0.002    0.140 v u3/A (BUF_X4)
-   0.024    0.164 v u3/Z (BUF_X4)
-   0.003    0.167 v u4/A (BUF_X8)
-   0.023    0.190 v u4/Z (BUF_X8)
-   0.004    0.195 v u5/A (BUF_X16)
-   0.024    0.218 v u5/Z (BUF_X16)
-   0.034    0.253 v r2/D (DFF_X1)
-            0.253   data arrival time
+   0.000    0.000 ^ r1/CK (DFF_X2)
+   0.146    0.146 ^ r1/Q (DFF_X2)
+   0.028    0.174 ^ u1/A (BUF_X1)
+   0.067    0.241 ^ u1/Z (BUF_X1)
+   0.007    0.247 ^ r2/D (DFF_X1)
+            0.247   data arrival time
 
    0.300    0.300   clock clk (rise edge)
    0.000    0.300   clock network delay (ideal)
    0.000    0.300   clock reconvergence pessimism
             0.300 ^ r2/CK (DFF_X1)
-  -0.054    0.246   library setup time
-            0.246   data required time
+  -0.040    0.260   library setup time
+            0.260   data required time
 -----------------------------------------------------------
-            0.246   data required time
-           -0.253   data arrival time
+            0.260   data required time
+           -0.247   data arrival time
 -----------------------------------------------------------
-           -0.007   slack (VIOLATED)
+            0.013   slack (MET)
 
 

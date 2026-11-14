@@ -1,72 +1,107 @@
-/////////////////////////////////////////////////////////////////////////////
-//
-// Copyright (c) 2019, OpenROAD
-// All rights reserved.
-//
-// BSD 3-Clause License
-//
-// Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions are met:
-//
-// * Redistributions of source code must retain the above copyright notice, this
-//   list of conditions and the following disclaimer.
-//
-// * Redistributions in binary form must reproduce the above copyright notice,
-//   this list of conditions and the following disclaimer in the documentation
-//   and/or other materials provided with the distribution.
-//
-// * Neither the name of the copyright holder nor the names of its
-//   contributors may be used to endorse or promote products derived from
-//   this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
-// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-// POSSIBILITY OF SUCH DAMAGE.
-//
-///////////////////////////////////////////////////////////////////////////////
+// SPDX-License-Identifier: BSD-3-Clause
+// Copyright (c) 2019-2025, The OpenROAD Authors
 
-#ifndef DB_SDC_NETWORK_H
-#define DB_SDC_NETWORK_H
+#pragma once
+#include <cstddef>
+#include <functional>
+#include <string>
+#include <string_view>
+#include <unordered_map>
 
+#include "sta/Network.hh"
+#include "sta/NetworkClass.hh"
 #include "sta/SdcNetwork.hh"
 
 namespace sta {
 
 class dbSdcNetwork : public SdcNetwork
 {
-public:
-  dbSdcNetwork(Network *network);
-  virtual Instance *findInstance(const char *path_name) const;
-  virtual void findInstancesMatching(const Instance *contex,
-				     const PatternMatch *pattern,
-				     InstanceSeq *insts) const;
-  virtual void findNetsMatching(const Instance *,
-				const PatternMatch *pattern,
-				NetSeq *nets) const;
-  virtual void findPinsMatching(const Instance *instance,
-				const PatternMatch *pattern,
-				PinSeq *pins) const;
+ public:
+  explicit dbSdcNetwork(Network* network);
+  Instance* findInstance(std::string_view path_name) const override;
+  InstanceSeq findInstancesMatching(const Instance* contex,
+                                    const PatternMatch* pattern) const override;
+  NetSeq findNetsMatching(const Instance*,
+                          const PatternMatch* pattern) const override;
+  PinSeq findPinsMatching(const Instance* instance,
+                          const PatternMatch* pattern) const override;
 
-protected:
-  void findInstancesMatching1(const PatternMatch *pattern,
-			      InstanceSeq *insts) const;
-  void findNetsMatching1(const PatternMatch *pattern,
-			 NetSeq *nets) const;
-  void findMatchingPins(const Instance *instance,
-			const PatternMatch *port_pattern,
-			PinSeq *pins) const;
-  Pin *findPin(const char *path_name) const;
+  // Drop the cache. Used on subtree-wide edits (parent change, modInst
+  // destroy) where surgical fix-up would be more error-prone than letting
+  // the next literal lookup rebuild lazily.
+  void invalidateSdcPathToInstMap()
+  {
+    sdc_path_to_inst_.clear();
+    inst_to_sdc_path_.clear();
+    cache_built_ = false;
+  }
 
+  // Incremental cache maintenance for hierarchy edits. Each is a no-op
+  // when the cache hasn't been built yet (lazy property preserved) or
+  // when the affected instance has no path component containing the
+  // divider — the cache only ever holds the small set of "pathological"
+  // entries that findInstance's recursive splitter cannot resolve.
+  void onInstCreated(Instance* inst);
+  void onInstDestroyed(Instance* inst);
+  void onInstRenamed(Instance* inst);
+
+  // Count full hierarchy scans for cache-maintenance diagnostics.
+  size_t sdcPathCacheBuildCount() const { return sdc_path_cache_build_count_; }
+
+ protected:
+  void findInstancesMatching1(const PatternMatch* pattern,
+                              InstanceSeq& insts) const;
+  void findNetsMatching1(const PatternMatch* pattern, NetSeq& nets) const;
+  void findMatchingPins(const Instance* instance,
+                        const PatternMatch* port_pattern,
+                        PinSeq& pins) const;
+  Pin* findPin(std::string_view path_name) const override;
   using SdcNetwork::findPin;
+
+ private:
+  // Heterogeneous string hashing so callers can look up by std::string_view
+  // without allocating a temporary std::string for each query.
+  struct TransparentStringHash
+  {
+    using is_transparent = void;
+    size_t operator()(std::string_view s) const noexcept
+    {
+      return std::hash<std::string_view>{}(s);
+    }
+  };
+  using SdcPathToInstMap = std::unordered_map<std::string,
+                                              Instance*,
+                                              TransparentStringHash,
+                                              std::equal_to<>>;
+  // Reverse map for O(1) erase-by-instance during destroy/rename.
+  using InstToSdcPathMap = std::unordered_map<const Instance*, std::string>;
+  using SdcPathVisitor
+      = std::function<void(Instance*, std::string sdc_path, bool any_div)>;
+
+  // DFS the hierarchy, invoking visitor(child, sdc_path, any_div) once per
+  // instance. any_div is true when sdc_path or any ancestor's leaf name
+  // contains the divider — i.e. findInstance cannot resolve sdc_path.
+  void visitAllInstancesSdcPath(const SdcPathVisitor& visitor) const;
+
+  // True iff inst itself or any ancestor has a STA-form leaf name
+  // containing the path divider (an escaped Verilog identifier such as
+  // "\foo/bar"). These are the only entries we cache.
+  bool hasPathologicalPath(const Instance* inst) const;
+
+  // Insert / erase keep both maps consistent. Callers must have ensured
+  // the cache is built; insertEntry additionally requires inst pathological.
+  void insertEntry(Instance* inst) const;
+  void eraseEntry(const Instance* inst) const;
+
+  // Lazy full-path -> Instance lookup, used by findInstancesMatching1 to
+  // resolve literal SDC patterns that the hierarchy walker missed (e.g. a
+  // Verilog escaped identifier "\foo/bar"). Only pathological entries are
+  // stored, so memory is O(escaped-identifier-count), not O(N).
+  const SdcPathToInstMap& sdcPathToInstMap() const;
+  mutable SdcPathToInstMap sdc_path_to_inst_;
+  mutable InstToSdcPathMap inst_to_sdc_path_;
+  mutable bool cache_built_ = false;
+  mutable size_t sdc_path_cache_build_count_ = 0;
 };
 
-} // namespace
-#endif
+}  // namespace sta

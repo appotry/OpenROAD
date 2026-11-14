@@ -1,144 +1,271 @@
-/////////////////////////////////////////////////////////////////////////////
-//
-// Copyright (c) 2019, OpenROAD
-// All rights reserved.
-//
-// BSD 3-Clause License
-//
-// Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions are met:
-//
-// * Redistributions of source code must retain the above copyright notice, this
-//   list of conditions and the following disclaimer.
-//
-// * Redistributions in binary form must reproduce the above copyright notice,
-//   this list of conditions and the following disclaimer in the documentation
-//   and/or other materials provided with the distribution.
-//
-// * Neither the name of the copyright holder nor the names of its
-//   contributors may be used to endorse or promote products derived from
-//   this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
-// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-// POSSIBILITY OF SUCH DAMAGE.
-//
-///////////////////////////////////////////////////////////////////////////////
+// SPDX-License-Identifier: BSD-3-Clause
+// Copyright (c) 2019-2025, The OpenROAD Authors
 
 #pragma once
 
-#include "opendb/db.h"
-#include "opendb/dbBlockCallBackObj.h"
-#include "sta/Sta.hh"
-#include "ord/OpenRoad.hh"
+#include <cstdint>
+#include <map>
+#include <memory>
+#include <set>
+#include <string>
+#include <vector>
 
-namespace gui {
-class Gui;
-}
+#include "db_sta/DelayFmt.hh"  // IWYU pragma: keep
+#include "db_sta/dbNetwork.hh"
+#include "odb/PtrSetMap.h"
+#include "odb/db.h"
+#include "odb/dbBlockCallBackObj.h"
+#include "odb/dbDatabaseObserver.h"
+#include "odb/dbObject.h"
+#include "sta/Clock.hh"
+#include "sta/Delay.hh"
+#include "sta/GraphClass.hh"
+#include "sta/Liberty.hh"
+#include "sta/MinMax.hh"
+#include "sta/Sta.hh"
+#include "utl/Logger.h"
 
 namespace ord {
 class OpenRoad;
 }
 
-namespace utl {
-class Logger;
-}
-
 namespace sta {
+
+// std::any and typeid do not work on incomplete types
+// talking to the OpenSTA author about implementing these
+// upstream instead. https://github.com/llvm/llvm-project/issues/36746
+// for llvm bug.
+//
+// Deleting all the constructors to preserve behavior as opaque pointers.
+// This should let RTTI based constructs like std::any to work on these
+// types. See
+// https://github.com/The-OpenROAD-Project/OpenROAD/pull/7725#discussion_r2201423922
+// for more information.
+class Library
+{
+ public:
+  Library() = delete;
+};
+class Cell
+{
+ public:
+  Cell() = delete;
+};
+class Port
+{
+ public:
+  Port() = delete;
+};
+class Instance
+{
+ public:
+  Instance() = delete;
+};
+class Pin
+{
+ public:
+  Pin() = delete;
+};
+class Term
+{
+ public:
+  Term() = delete;
+};
+class Net
+{
+ public:
+  Net() = delete;
+};
+class ViewType
+{
+ public:
+  ViewType() = delete;
+};
 
 class dbSta;
 class dbNetwork;
 class dbStaReport;
 class dbStaCbk;
-class PathRenderer;
+class DbStaLevelizeObserver;
+class PatternMatch;
+class TestCell;
 
-using ord::OpenRoad;
-using utl::Logger;
-
-using odb::dbDatabase;
-using odb::dbLib;
-using odb::dbNet;
-using odb::dbInst;
-using odb::dbITerm;
-using odb::dbBTerm;
-using odb::dbBlock;
-using odb::dbTech;
-using odb::dbLib;
-using odb::dbMaster;
-using odb::dbBlockCallBackObj;
-
-class dbSta : public Sta, public ord::OpenRoad::Observer
+// Handles registering and unregistering with dbSta
+class dbStaState : public sta::StaState
 {
-public:
-  dbSta();
-  virtual ~dbSta();
-  void init(Tcl_Interp *tcl_interp,
-	    dbDatabase *db,
-            gui::Gui *gui,
-            Logger *logger);
+ public:
+  void init(dbSta* sta);
+  ~dbStaState() override;
 
-  dbDatabase *db() { return db_; }
-  virtual void makeComponents() override;
-  dbNetwork *getDbNetwork() { return db_network_; }
-  dbStaReport *getDbReport() { return db_report_; }
-
-  Slack netSlack(const dbNet *net,
-		 const MinMax *min_max);
-
-  // From ord::OpenRoad::Observer
-  virtual void postReadLef(odb::dbTech* tech, odb::dbLib* library) override;
-  virtual void postReadDef(odb::dbBlock* block) override;
-  virtual void postReadDb(odb::dbDatabase* db) override;
-
-  // Find clock nets connected by combinational gates from the clock roots. 
-  std::set<dbNet*> findClkNets();
-  std::set<dbNet*> findClkNets(const Clock *clk);
-
-  virtual void deleteInstance(Instance *inst) override;
-  virtual void deleteNet(Net *net) override;
-  virtual void connectPin(Instance *inst,
-			  Port *port,
-			  Net *net) override;
-  virtual void connectPin(Instance *inst,
-			  LibertyPort *port,
-			  Net *net) override;
-  virtual void disconnectPin(Pin *pin) override;
-  // Highlight path in the gui.
-  void highlight(PathRef *path);
-
-  using Sta::netSlack;
-  using Sta::replaceCell;
-
-protected:
-  virtual void makeReport() override;
-  virtual void makeNetwork() override;
-  virtual void makeSdcNetwork() override;
-
-  virtual void replaceCell(Instance *inst,
-                           Cell *to_cell,
-                           LibertyCell *to_lib_cell) override;
-
-  dbDatabase *db_;
-  gui::Gui *gui_;
-  Logger *logger_;
-
-  dbNetwork *db_network_;
-  dbStaReport *db_report_;
-  dbStaCbk *db_cbk_;
-  PathRenderer *path_renderer_;
+ protected:
+  dbSta* sta_ = nullptr;
 };
 
-// Make a stand-alone (scratchpad) sta for block.
-dbSta *
-makeBlockSta(OpenRoad *openroad,
-             dbBlock *block);
+class dbSta : public Sta, public odb::dbDatabaseObserver
+{
+ public:
+  dbSta(Tcl_Interp* tcl_interp, odb::dbDatabase* db, utl::Logger* logger);
+  ~dbSta() override;
 
-} // namespace
+  enum InstType
+  {
+    BLOCK,
+    PAD,
+    PAD_INPUT,
+    PAD_OUTPUT,
+    PAD_INOUT,
+    PAD_POWER,
+    PAD_SPACER,
+    PAD_AREAIO,
+    ENDCAP,
+    FILL,
+    TAPCELL,
+    BUMP,
+    COVER,
+    ANTENNA,
+    TIE,
+    LEF_OTHER,
+    STD_CELL,
+    STD_BUF,
+    STD_BUF_CLK_TREE,
+    STD_BUF_TIMING_REPAIR,
+    STD_INV,
+    STD_INV_CLK_TREE,
+    STD_INV_TIMING_REPAIR,
+    STD_CLOCK_GATE,
+    STD_LEVEL_SHIFT,
+    STD_SEQUENTIAL,
+    STD_PHYSICAL,
+    STD_COMBINATIONAL,
+    STD_OTHER
+  };
+
+  // Report Instances Type
+  struct TypeStats
+  {
+    int count{0};
+    int64_t area{0};
+  };
+  using InstTypeMap = std::map<InstType, TypeStats>;
+
+  void initVars(Tcl_Interp* tcl_interp,
+                odb::dbDatabase* db,
+                utl::Logger* logger);
+
+  // Creates a dbSta instance for the given dbBlock using the same context as
+  // this dbSta instance (e.g. TCL interpreter, units, etc.)
+  std::unique_ptr<dbSta> makeBlockSta(odb::dbBlock* block);
+
+  odb::dbDatabase* db() { return db_; }
+  dbNetwork* getDbNetwork() { return db_network_; }
+  dbStaReport* getDbReport() { return db_report_; }
+
+  float slack(const odb::dbNet* net, const MinMax* min_max);
+
+  // Copy the user/SAIF/VCD activity annotated on from to to, for netlist
+  // edits that replace a pin with an equivalent one.
+  void copyUserActivity(odb::dbITerm* from, odb::dbITerm* to);
+
+  // From ord::OpenRoad::Observer
+  void postReadLef(odb::dbTech* tech, odb::dbLib* library) override;
+  void postReadDef(odb::dbBlock* block) override;
+  void postReadDb(odb::dbDatabase* db) override;
+  void postRead3Dbx(odb::dbChip* chip) override;
+
+  // Find clock nets connected by combinational gates from the clock roots.
+  odb::PtrSet<odb::dbNet> findClkNets();
+  odb::PtrSet<odb::dbNet> findClkNets(Mode* mode);
+  odb::PtrSet<odb::dbNet> findClkNets(const Clock* clk);
+
+  void deleteInstance(Instance* inst) override;
+  void deleteNet(Net* net) override;
+  void connectPin(Instance* inst, Port* port, Net* net) override;
+  void connectPin(Instance* inst, LibertyPort* port, Net* net) override;
+  void disconnectPin(Pin* pin) override;
+
+  void updateComponentsState() override;
+  void registerStaState(dbStaState* state);
+  void unregisterStaState(dbStaState* state);
+
+  std::string getInstanceTypeText(InstType type) const;
+  InstType getInstanceType(odb::dbInst* inst);
+  void reportCellUsage(odb::dbModule* module,
+                       bool verbose,
+                       const char* file_name,
+                       const char* stage_name);
+  void countInstancesByType(odb::dbModule* module,
+                            InstTypeMap& inst_type_stats,
+                            std::vector<odb::dbInst*>& insts);
+  void countPhysicalOnlyInstancesByType(InstTypeMap& inst_type_stats,
+                                        std::vector<odb::dbInst*>& insts);
+  void addInstanceByTypeInstance(odb::dbInst* inst,
+                                 InstTypeMap& inst_type_stats);
+
+  // bin_size: fixed bin width in user time units (e.g., ns).
+  //           If 0.0, num_bins is used to determine bin width automatically.
+  void reportTimingHistogram(int num_bins,
+                             const MinMax* min_max,
+                             float bin_size = 0.0) const;
+
+  // Create a logic depth histogram report.
+  void reportLogicDepthHistogram(int num_bins,
+                                 bool exclude_buffers,
+                                 bool exclude_inverters) const;
+
+  // Get the levels of logic for all endpoints.
+  std::vector<int> levelsOfLogic(bool exclude_buffers,
+                                 bool exclude_inverters) const;
+
+  utl::Logger* getLogger() { return logger_; }
+
+  // Sanity checkers
+  int checkSanity();
+  void checkSanityNetlistConsistency() const;
+  void checkSanityDrvrVertexEdges(const Pin* pin) const;
+  void checkSanityDrvrVertexEdges(const odb::dbObject* term) const;
+  void checkSanityDrvrVertexEdges() const;
+
+  // Debugging utilities
+  void dumpModInstPinSlacks(const char* mod_inst_name,
+                            const char* filename,
+                            const MinMax* min_max = MinMax::max());
+  void dumpModInstGraphConnections(const char* mod_inst_name,
+                                   const char* filename);
+
+  using Sta::replaceCell;
+  using Sta::slack;
+
+  // Drivers sorted by (level, name) for determinism.
+  const VertexSeq& levelizedDrvrVertices();
+  // Discard the cached driver-vertex list. Callers that mutate the timing
+  // graph outside the LevelizeObserver path (e.g. dbStaCbk on dbInst
+  // create/destroy) must invalidate so the next query rebuilds.
+  void invalidateLevelizedDrvrVertices();
+
+ private:
+  void makeReport() override;
+  void makeNetwork() override;
+  void makeSdcNetwork() override;
+  void makeObservers() override;
+
+  void replaceCell(Instance* inst,
+                   Cell* to_cell,
+                   LibertyCell* to_lib_cell) override;
+
+  odb::dbDatabase* db_ = nullptr;
+  utl::Logger* logger_ = nullptr;
+
+  dbNetwork* db_network_ = nullptr;
+  dbStaReport* db_report_ = nullptr;
+  std::unique_ptr<dbStaCbk> db_cbk_;
+  // dbBlockCallBackObj has set-semantics (one owner per object). For 3DIC the
+  // top has no own dbBlock; callbacks must hook every chiplet's dbBlock, so
+  // allocate one dbStaCbk per chiplet block here.
+  std::vector<std::unique_ptr<dbStaCbk>> chiplet_cbks_;
+  std::set<dbStaState*> sta_states_;
+
+  VertexSeq levelized_drvr_vertices_;
+  bool drvr_vertices_level_valid_ = false;
+};
+
+}  // namespace sta

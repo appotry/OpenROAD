@@ -7,11 +7,18 @@ read_def repair_hold3.def
 create_clock -period 2 clk
 set_propagated_clock clk
 
+source Nangate45/Nangate45.rc
 set_wire_rc -layer metal1
 estimate_parasitics -placement
 
-report_checks -path_delay min -format full_clock -digits 3 -group_count 3
+report_worst_slack -min
+report_worst_slack -max
 
+write_verilog_for_eqy repair_hold3 before "None"
 repair_timing -hold
+run_equivalence_test repair_hold3 \
+  -lib_dir ./Nangate45/work_around_yosys/ \
+  -remove_cells "None"
 
-report_checks -path_delay min -format full_clock -digits 3 -group_count 3
+report_worst_slack -min
+report_worst_slack -max

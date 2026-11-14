@@ -1,52 +1,19 @@
-/////////////////////////////////////////////////////////////////////////////
-//
-// BSD 3-Clause License
-//
-// Copyright (c) 2019, University of California, San Diego.
-// All rights reserved.
-//
-// Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions are met:
-//
-// * Redistributions of source code must retain the above copyright notice, this
-//   list of conditions and the following disclaimer.
-//
-// * Redistributions in binary form must reproduce the above copyright notice,
-//   this list of conditions and the following disclaimer in the documentation
-//   and/or other materials provided with the distribution.
-//
-// * Neither the name of the copyright holder nor the names of its
-//   contributors may be used to endorse or promote products derived from
-//   this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
-// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-// POSSIBILITY OF SUCH DAMAGE.
-//
-///////////////////////////////////////////////////////////////////////////////
+// SPDX-License-Identifier: BSD-3-Clause
+// Copyright (c) 2019-2025, The OpenROAD Authors
 
 #pragma once
 
-#include <functional>
-#include <iostream>
-#include <limits>
+#include <map>
 #include <string>
 #include <vector>
 
-#include "opendb/db.h"
+#include "odb/PtrSetMap.h"
+#include "odb/db.h"
+#include "odb/dbTypes.h"
+#include "odb/geom.h"
+#include "ppl/IOPlacer.h"
 
 namespace ppl {
-
-using odb::Point;
-using odb::Rect;
 
 struct Constraint;
 struct Section;
@@ -59,15 +26,6 @@ enum class Orientation
   south,
   east,
   west
-};
-
-enum class Direction
-{
-  input,
-  output,
-  inout,
-  feedthru,
-  invalid
 };
 
 class InstancePin
@@ -93,29 +51,28 @@ class IOPin
   IOPin(odb::dbBTerm* bterm,
         const odb::Point& pos,
         Direction dir,
-        odb::Point lower_bound,
-        odb::Point upper_bound,
-        odb::dbPlacementStatus placement_status)
+        const odb::Point& lower_bound,
+        const odb::Point& upper_bound,
+        const odb::dbPlacementStatus& placement_status)
       : bterm_(bterm),
         pos_(pos),
-        orientation_(Orientation::north),
+        initial_pos_(pos),
         direction_(dir),
         lower_bound_(lower_bound),
         upper_bound_(upper_bound),
-        placement_status_(placement_status),
-        layer_(-1),
-        in_group(false),
-        assigned_to_section_(false)
+        placement_status_(placement_status)
   {
   }
 
   void setOrientation(const Orientation o) { orientation_ = o; }
   Orientation getOrientation() const { return orientation_; }
   odb::Point getPosition() const { return pos_; }
+  // Where the pin was before the placer moved it.
+  const odb::Point& getInitialPosition() const { return initial_pos_; }
   void setX(const int x) { pos_.setX(x); }
   void setY(const int y) { pos_.setY(y); }
-  void setPos(const odb::Point pos) { pos_ = pos; }
-  void setPos(const int x, const int y) { pos_ = odb::Point(x, y); }
+  void setPosition(const odb::Point& pos) { pos_ = pos; }
+  void setPosition(const int x, const int y) { pos_ = odb::Point(x, y); }
   void setLowerBound(const int x, const int y)
   {
     lower_bound_ = odb::Point(x, y);
@@ -124,34 +81,71 @@ class IOPin
   {
     upper_bound_ = odb::Point(x, y);
   };
-  void setLayer(const int layer) { layer_ = layer; }
   std::string getName() const { return bterm_->getName(); }
-  odb::Point getPos() const { return pos_; }
   int getX() const { return pos_.getX(); }
   int getY() const { return pos_.getY(); }
   Direction getDirection() const { return direction_; }
   odb::Point getLowerBound() const { return lower_bound_; };
   odb::Point getUpperBound() const { return upper_bound_; };
+  int getArea() const;
   std::string getNetName() const { return bterm_->getNet()->getName(); }
-  odb::dbPlacementStatus getPlacementStatus() const { return placement_status_; };
+  odb::dbPlacementStatus getPlacementStatus() const
+  {
+    return placement_status_;
+  };
   odb::dbBTerm* getBTerm() const { return bterm_; }
   int getLayer() const { return layer_; }
-  bool isInGroup() const { return in_group; }
-  void inGroup() { in_group = true; }
+  void setLayer(const int layer) { layer_ = layer; }
+  odb::Line getLine() const { return line_; }
+  void setLine(const odb::Line line) { line_ = line; }
+  int getGroupIdx() const { return group_idx_; }
+  void setGroupIdx(const int group_idx) { group_idx_ = group_idx; }
+  int getConstraintIdx() const { return constraint_idx_; }
+  void setConstraintIdx(const int constraint_idx)
+  {
+    constraint_idx_ = constraint_idx;
+  }
+  int getMirrorPinIdx() const { return mirror_pin_idx_; }
+  void setMirrorPinIdx(const int mirror_pin_idx)
+  {
+    mirror_pin_idx_ = mirror_pin_idx;
+  }
+  bool isPlaced() const { return is_placed_; }
+  void setPlaced() { is_placed_ = true; }
+  bool isInGroup() const { return in_group_; }
+  void setInGroup() { in_group_ = true; }
+  bool isInConstraint() const { return in_constraint_; }
+  void setInConstraint() { in_constraint_ = true; }
   void assignToSection() { assigned_to_section_ = true; }
   bool isAssignedToSection() { return assigned_to_section_; }
+  void setMirrored() { is_mirrored_ = true; }
+  bool isMirrored() const { return is_mirrored_; }
+  bool inFallback() const { return in_fallback_; }
+  void setFallback() { in_fallback_ = true; }
+  Edge getEdge() const { return edge_; }
+  void setEdge(Edge edge) { edge_ = edge; }
 
  private:
   odb::dbBTerm* bterm_;
   odb::Point pos_;
-  Orientation orientation_;
+  odb::Point initial_pos_;
+  Orientation orientation_{Orientation::north};
   Direction direction_;
   odb::Point lower_bound_;
   odb::Point upper_bound_;
   odb::dbPlacementStatus placement_status_;
-  int layer_;
-  bool in_group;
-  bool assigned_to_section_;
+  odb::Line line_;
+  int layer_{-1};
+  int group_idx_{-1};
+  int constraint_idx_{-1};
+  int mirror_pin_idx_{-1};
+  bool is_placed_{false};
+  bool in_group_{false};
+  bool in_constraint_{false};
+  bool assigned_to_section_{false};
+  bool is_mirrored_{false};
+  bool in_fallback_{false};
+  Edge edge_{Edge::invalid};
 };
 
 class Netlist
@@ -159,32 +153,42 @@ class Netlist
  public:
   Netlist();
 
-  void addIONet(const IOPin&, const std::vector<InstancePin>&);
-  int createIOGroup(const std::vector<odb::dbBTerm*>& pin_list);
-  void addIOGroup(const std::vector<int>& pin_group);
-  std::vector<std::vector<int>>& getIOGroups() { return io_groups_; }
-  void setIOGroups(const std::vector<std::vector<int>>& io_groups) { io_groups_ = io_groups; }
-  int numSinksOfIO(int);
+  void addIONet(const IOPin& io_pin, const std::vector<InstancePin>& inst_pins);
+  int createIOGroup(const std::vector<odb::dbBTerm*>& pin_list,
+                    bool order,
+                    int group_idx);
+  void addIOGroup(const std::vector<int>& pin_group, bool order);
+  const std::vector<PinGroupByIndex>& getIOGroups() { return io_groups_; }
+  void setIOGroups(const std::vector<PinGroupByIndex>& io_groups)
+  {
+    io_groups_ = io_groups;
+  }
+  int numSinksOfIO(int idx);
   int numIOPins();
   int numIOGroups() { return io_groups_.size(); }
   std::vector<IOPin>& getIOPins() { return io_pins_; }
   IOPin& getIoPin(int idx) { return io_pins_[idx]; }
-  int getIoPinIdx(odb::dbBTerm* bterm) { return _db_pin_idx_map[bterm]; }
+  int getIoPinIdx(odb::dbBTerm* bterm) { return db_pin_idx_map_[bterm]; }
   void getSinksOfIO(int idx, std::vector<InstancePin>& sinks);
 
-  int computeIONetHPWL(int, odb::Point);
-  int computeIONetHPWL(int, odb::Point, Edge, const std::vector<Constraint>&);
-  int computeIONetHPWL(int, const Section&, const std::vector<Constraint>&, const std::vector<Slot>&);
-  int computeDstIOtoPins(int, odb::Point);
-  odb::Rect getBB(int, odb::Point);
-  void clear();
+  int computeIONetHPWL(int idx, const odb::Point& slot_pos);
+  int computeDstIOtoPins(int idx, const odb::Point& slot_pos);
+  void setMinimizeDisplacement(bool minimize)
+  {
+    minimize_displacement_ = minimize;
+  }
+  bool getMinimizeDisplacement() const { return minimize_displacement_; }
+  void sortPinsFromGroup(int group_idx, Edge edge);
+  odb::Rect getBB(int idx, const odb::Point& slot_pos);
+  void reset();
 
  private:
   std::vector<InstancePin> inst_pins_;
   std::vector<int> net_pointer_;
   std::vector<IOPin> io_pins_;
-  std::vector<std::vector<int>> io_groups_;
-  std::map<odb::dbBTerm*, int> _db_pin_idx_map;
+  std::vector<PinGroupByIndex> io_groups_;
+  odb::PtrMap<odb::dbBTerm, int> db_pin_idx_map_;
+  bool minimize_displacement_ = false;
 };
 
 }  // namespace ppl

@@ -1,346 +1,235 @@
-############################################################################
-##
-## Copyright (c) 2019, OpenROAD
-## All rights reserved.
-##
-## BSD 3-Clause License
-##
-## Redistribution and use in source and binary forms, with or without
-## modification, are permitted provided that the following conditions are met:
-##
-## * Redistributions of source code must retain the above copyright notice, this
-##   list of conditions and the following disclaimer.
-##
-## * Redistributions in binary form must reproduce the above copyright notice,
-##   this list of conditions and the following disclaimer in the documentation
-##   and/or other materials provided with the distribution.
-##
-## * Neither the name of the copyright holder nor the names of its
-##   contributors may be used to endorse or promote products derived from
-##   this software without specific prior written permission.
-##
-## THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-## AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-## IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-## ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
-## LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-## CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-## SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-## INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-## CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-## ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-## POSSIBILITY OF SUCH DAMAGE.
-##
-############################################################################
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2019-2025, The OpenROAD Authors
 
-# Units are from OpenSTA (ie Liberty file or set_cmd_units).
-sta::define_cmd_args "set_layer_rc" { [-layer layer]\
-					[-via via_layer]\
-					[-capacitance cap]\
-					[-resistance res]\
-                                        [-corner corner]}
-proc set_layer_rc {args} {
-  sta::parse_key_args "set_layer_rc" args \
-    keys {-layer -via -capacitance -resistance -corner}\
-    flags {}
+namespace eval rsz {
+proc parse_buffer_cell { keys_var } {
+  upvar 1 $keys_var keys
+  set buffer_cell "NULL"
 
-  if { [info exists keys(-layer)] && [info exists keys(-via)] } {
-    utl::error "ORD" 10 "Use -layer or -via but not both."
-  }
+  if { [info exists keys(-buffer_cell)] } {
+    set buffer_cell_name $keys(-buffer_cell)
+    if { $buffer_cell_name ne "" } {
+      set buffer_cell [sta::get_lib_cell_error "-buffer_cell" $buffer_cell_name]
 
-  set corners [sta::parse_corner_or_all keys]
-  set tech [ord::get_db_tech]
-  if { [info exists keys(-layer)] } {
-    set layer_name $keys(-layer)
-    set layer [$tech findLayer $layer_name]
-    if { $layer == "NULL" } {
-      utl::error "ORD" 19 "layer $layer_name not found."
-    }
-
-    if { [$layer getRoutingLevel] == 0 } {
-      utl::error "ORD" 18 "$layer_name is not a routing layer."
-    }
-
-    if { ![info exists keys(-capacitance)] && ![info exists keys(-resistance)] } {
-      utl::error "ORD" 12 "missing -capacitance or -resistance argument."
-    }
-
-    set cap 0.0
-    if { [info exists keys(-capacitance)] } {
-      set cap $keys(-capacitance)
-      sta::check_positive_float "-capacitance" $cap
-      # F/m
-      set cap [expr [sta::capacitance_ui_sta $cap] / [sta::distance_ui_sta 1.0]]
-    }
-    
-    set res 0.0
-    if { [info exists keys(-resistance)] } {
-      set res $keys(-resistance)
-      sta::check_positive_float "-resistance" $res
-      # ohm/m
-      set res [expr [sta::resistance_ui_sta $res] / [sta::distance_ui_sta 1.0]]
-    }
-
-    if { $corners == "NULL" } {
-      set corners [sta::corners]
-      # Only update the db layers if -corner not specified.
-      rsz::set_dblayer_wire_rc $layer $res $cap
-    }
-
-    foreach corner $corners {
-      rsz::set_layer_rc_cmd $layer $corner $res $cap
-    }
-
-  } elseif { [info exists keys(-via)] } {
-    set layer_name $keys(-via)
-    set layer [$tech findLayer $layer_name]
-    if { $layer == "NULL" } {
-      utl::error "ORD" 21 "via $layer_name not found."
-    }
-    
-    if { [info exists keys(-capacitance)] } {
-      utl::warn "ORD" 22 "-capacitance not supported for vias."
-    }
-    
-    if { [info exists keys(-resistance)] } {
-      set res $keys(-resistance)
-      sta::check_positive_float "-resistance" $res
-      set res [sta::resistance_ui_sta $res]
-
-      if { $corners == "NULL" } {
-        set corners [sta::corners]
-        # Only update the db layers if -corner not specified.
-        rsz::set_dbvia_wire_r $layer $res
+      # the lib cell is a buffer?
+      if { $buffer_cell ne "NULL" && ![get_property $buffer_cell is_buffer] } {
+        utl::error RSZ 211 "[get_name $buffer_cell] is not a buffer."
       }
-
-      foreach corner $corners {
-        rsz::set_layer_rc_cmd $layer $corner $res 0.0
-      }
-    } else {
-      utl::error "ORD" 17 "no -resistance specified for via."
     }
-  } else {
-    utl::error "ORD" 9 "missing -layer or -via argument."
   }
+  return $buffer_cell
 }
 
-sta::define_cmd_args "set_wire_rc" {[-clock] [-signal]\
-                                      [-layer layer_name]\
-                                      [-resistance res]\
-                                      [-capacitance cap]\
-                                      [-corner corner]}
-
-proc set_wire_rc { args } {
-  sta::parse_key_args "set_wire_rc" args \
-    keys {-layer -resistance -capacitance -corner} \
-    flags {-clock -signal -data}
-  
-  set corner [sta::parse_corner_or_all keys]
-  
-  set wire_res 0.0
-  set wire_cap 0.0
-  if { [info exists keys(-layer)] } {
-    if { [info exists keys(-resistance)] \
-           || [info exists keys(-capacitance)] } {
-      utl::error RSZ 1 "Use -layer or -resistance/-capacitance but not both."
-    }
-    set layer_name $keys(-layer)
-    set layer [[ord::get_db_tech] findLayer $layer_name]
-    if { $layer == "NULL" } {
-      utl::error RSZ 2 "layer $layer_name not found."
-    }
-
-    if { $corner == "NULL" } {
-      lassign [rsz::dblayer_wire_rc $layer] wire_res wire_cap
-    } else {
-      set wire_res [rsz::layer_resistance $layer $corner]
-      set wire_cap [rsz::layer_capacitance $layer $corner]
-    }
-
-    # Unfortunately this does not work very well with technologies like sky130
-    # that use inappropriate kohm/pf units.
-    if { 0 } {
-      utl::info RSZ 61 "$signal_clk wire resistance [sta::format_resistance [expr $wire_res * 1e-6] 6] [sta::unit_scale_abreviation resistance][sta::unit_suffix resistance]/um capacitance [sta::format_capacitance [expr $wire_cap * 1e-6] 6] [sta::unit_scale_abreviation capacitance][sta::unit_suffix capacitance]/um."
-    }
-  } else {
-    ord::ensure_units_initialized
-    if { [info exists keys(-resistance)] } {
-      set res $keys(-resistance)
-      sta::check_positive_float "-resistance" $res
-      set wire_res [expr [sta::resistance_ui_sta $res] / [sta::distance_ui_sta 1.0]]
-    }
-    
-    if { [info exists keys(-capacitance)] } {
-      set cap $keys(-capacitance)
-      sta::check_positive_float "-capacitance" $cap
-      set wire_cap [expr [sta::capacitance_ui_sta $cap] / [sta::distance_ui_sta 1.0]]
-    }
-  }
-  
-  sta::check_argc_eq0 "set_wire_rc" $args
-  
-  set signal [info exists flags(-signal)]
-  set clk [info exists flags(-clock)]
-  if { !$signal && !$clk } {
-    set signal 1
-    set clk 1
-  }
-  
-  if { $signal && $clk } {
-    set signal_clk "Signal/clock"
-  } elseif { $signal } {
-    set signal_clk "Signal"
-  } elseif { $clk } {
-    set signal_clk "Clock"
-  }
-  
-  if { $wire_res == 0.0 } {
-    utl::warn RSZ 10 "$signal_clk wire resistance is 0."
-  }
-  if { $wire_cap == 0.0 } {
-    utl::warn RSZ 11 "$signal_clk wire capacitance is 0."
-  }
-
-  set corners $corner
-  if { $corner == "NULL" } {
-    set corners [sta::corners]
-  }
-  foreach corner $corners {
-    if { $signal } {
-      rsz::set_wire_signal_rc_cmd $corner $wire_res $wire_cap
-    }
-    if { $clk } {
-      rsz::set_wire_clk_rc_cmd $corner $wire_res $wire_cap
+# The keys a command cannot do without.
+proc check_required_keys { keys_var required_keys } {
+  upvar 1 $keys_var keys
+  foreach required_key $required_keys {
+    if { ![info exists keys($required_key)] } {
+      utl::error RSZ 3203 "$required_key is required."
     }
   }
 }
 
-sta::define_cmd_args "estimate_parasitics" { -placement|-global_routing }
-
-proc estimate_parasitics { args } {
-  sta::parse_key_args "estimate_parasitics" args \
-    keys {} flags {-placement -global_routing}
-  
-  sta::check_argc_eq0 "estimate_parasitics" $args
-  if { [info exists flags(-placement)] } {
-    set have_rc 1
-    foreach corner [sta::corners] {
-      if { [rsz::wire_signal_capacitance $corner] == 0.0 } {
-        utl::warn RSZ 14 "wire capacitance for corner [$corner name] is zero. Use the set_wire_rc command to set wire resistance and capacitance."
-        set have_rc 0
-      }
-    }
-    if { $have_rc } {
-      rsz::estimate_parasitics_cmd
-    }
-  } elseif { [info exists flags(-global_routing)] } {
-    grt::estimate_rc_cmd
-  } else {
-    utl::error RSZ 3 "missing -placement or -global_routing flag."
+# -delay_levels of the delay estimator accuracy reports: 0, 1 or 2.
+proc check_delay_levels { delay_levels } {
+  if { ![string is integer -strict $delay_levels] } {
+    utl::error RSZ 3206 "-delay_levels must be an integer."
   }
+  if { $delay_levels < 0 || $delay_levels > 2 } {
+    utl::error RSZ 3207 "-delay_levels must be 0, 1, or 2."
+  }
+}
+
+# namespace eval rsz
 }
 
 sta::define_cmd_args "set_dont_use" {lib_cells}
 
 proc set_dont_use { args } {
-  sta::check_argc_eq1 "set_dont_use" $args
-  rsz::set_dont_use_cmd [sta::get_lib_cells_arg "-dont_use" [lindex $args 0] utl::warn]
+  sta::parse_key_args "set_dont_use" args keys {} flags {}
+  set_dont_use_cmd "set_dont_use" $args 1
+}
+
+sta::define_cmd_args "unset_dont_use" {lib_cells}
+
+proc unset_dont_use { args } {
+  sta::parse_key_args "unset_dont_use" args keys {} flags {}
+  set_dont_use_cmd "unset_dont_use" $args 0
+}
+
+sta::define_cmd_args "reset_dont_use" {}
+
+proc reset_dont_use { args } {
+  sta::parse_key_args "reset_dont_use" args keys {} flags {}
+  rsz::reset_dont_use
+}
+
+proc set_dont_use_cmd { cmd cmd_args dont_use } {
+  sta::check_argc_eq1 $cmd $cmd_args
+  foreach lib_cell [sta::get_lib_cells_arg $cmd [lindex $cmd_args 0] sta::sta_warn] {
+    rsz::set_dont_use $lib_cell $dont_use
+  }
+}
+
+sta::define_cmd_args "set_dont_touch" {nets_instances}
+
+proc set_dont_touch { args } {
+  sta::parse_key_args "set_dont_touch" args keys {} flags {}
+  set_dont_touch_cmd "set_dont_touch" $args 1
+}
+
+sta::define_cmd_args "unset_dont_touch" {nets_instances}
+
+proc unset_dont_touch { args } {
+  sta::parse_key_args "unset_dont_touch" args keys {} flags {}
+  set_dont_touch_cmd "unset_dont_touch" $args 0
+}
+
+proc set_dont_touch_cmd { cmd cmd_args dont_touch } {
+  sta::check_argc_eq1 $cmd $cmd_args
+  sta::parse_inst_net_arg [lindex $cmd_args 0] insts nets
+  foreach inst $insts {
+    rsz::set_dont_touch_instance $inst $dont_touch
+  }
+  foreach net $nets {
+    rsz::set_dont_touch_net $net $dont_touch
+  }
+}
+
+sta::define_cmd_args "report_dont_use" {}
+
+proc report_dont_use { args } {
+  sta::parse_key_args "report_dont_use" args keys {} flags {}
+  sta::check_argc_eq0 "report_dont_use" $args
+
+  rsz::report_dont_use
+}
+
+sta::define_cmd_args "report_dont_touch" {}
+
+proc report_dont_touch { args } {
+  sta::parse_key_args "report_dont_touch" args keys {} flags {}
+  sta::check_argc_eq0 "report_dont_touch" $args
+
+  rsz::report_dont_touch
 }
 
 sta::define_cmd_args "buffer_ports" {[-inputs] [-outputs]\
-                                       [-max_utilization util]}
+                                     [-max_utilization util]\
+                                     [-buffer_cell buf_cell]\
+                                     [-verbose]}
 
 proc buffer_ports { args } {
   sta::parse_key_args "buffer_ports" args \
     keys {-buffer_cell -max_utilization} \
-    flags {-inputs -outputs}
-  
-  if { [info exists keys(-buffer_cell)] } {
-    utl::warn RSZ 15 "-buffer_cell is deprecated."
-  }
-  
+    flags {-inputs -outputs -verbose}
+
   set buffer_inputs [info exists flags(-inputs)]
   set buffer_outputs [info exists flags(-outputs)]
   if { !$buffer_inputs && !$buffer_outputs } {
     set buffer_inputs 1
     set buffer_outputs 1
   }
+
+  set verbose [info exists flags(-verbose)]
+
   sta::check_argc_eq0 "buffer_ports" $args
-  
+
   rsz::set_max_utilization [rsz::parse_max_util keys]
-  rsz::resizer_preamble
+  set buffer_cell [rsz::parse_buffer_cell keys]
+
   if { $buffer_inputs } {
-    rsz::buffer_inputs
+    rsz::buffer_inputs $buffer_cell $verbose
   }
   if { $buffer_outputs } {
-    rsz::buffer_outputs
+    rsz::buffer_outputs $buffer_cell $verbose
   }
 }
 
-sta::define_cmd_args "remove_buffers" {}
+sta::define_cmd_args "remove_buffers" { instances }
 
 proc remove_buffers { args } {
-  sta::check_argc_eq0 "remove_buffers" $args
-  rsz::remove_buffers_cmd
+  sta::parse_key_args "remove_buffers" args keys {} flags {}
+  rsz::remove_buffers_cmd [get_cells $args]
 }
 
-sta::define_cmd_args "repair_design" {[-max_wire_length max_wire_length]\
-                                        [-max_utilization util]}
+sta::define_cmd_args "balance_row_usage" {}
+
+proc balance_row_usage { args } {
+  sta::parse_key_args "balance_row_usage" args keys {} flags {}
+  sta::check_argc_eq0 "balance_row_usage" $args
+  rsz::balance_row_usage_cmd
+}
+
+sta::define_cmd_args "repair_design" {[-max_wire_length max_wire_length] \
+                                      [-max_utilization util] \
+                                      [-slew_margin slack_margin] \
+                                      [-cap_margin cap_margin] \
+                                      [-buffer_gain gain] \
+                                      [-pre_placement] \
+                                      [-match_cell_footprint] \
+                                      [-reroute] \
+                                      [-verbose]}
 
 proc repair_design { args } {
   sta::parse_key_args "repair_design" args \
-    keys {-max_wire_length -buffer_cell -libraries -max_utilization} \
-    flags {}
-  
-  if { [info exists keys(-buffer_cell)] } {
-    utl::warn RSZ 16 "-buffer_cell is deprecated."
-  }
-  if { [info exists keys(-libraries)] } {
-    utl::warn RSZ 13 "-libraries is deprecated."
-  }
+    keys {-max_wire_length -max_utilization -slew_margin -cap_margin -buffer_gain} \
+    flags {-match_cell_footprint -verbose -pre_placement -reroute}
+
   set max_wire_length [rsz::parse_max_wire_length keys]
-  
+  set slew_margin [rsz::parse_percent_margin_arg "-slew_margin" keys]
+  set cap_margin [rsz::parse_percent_margin_arg "-cap_margin" keys]
+
+  set pre_placement [info exists flags(-pre_placement)]
+  if { [info exists keys(-buffer_gain)] } {
+    set pre_placement true
+    utl::warn "RSZ" 149 "-buffer_gain is deprecated"
+  }
   rsz::set_max_utilization [rsz::parse_max_util keys]
-  
+
   sta::check_argc_eq0 "repair_design" $args
-  rsz::check_parasitics
-  rsz::resizer_preamble
-  set max_wire_length [rsz::check_max_wire_length $max_wire_length]
-  rsz::repair_design_cmd $max_wire_length
+  est::check_parasitics
+  set max_wire_length [rsz::check_max_wire_length $max_wire_length false]
+  set match_cell_footprint [info exists flags(-match_cell_footprint)]
+  set verbose [info exists flags(-verbose)]
+  set reroute [info exists flags(-reroute)]
+  rsz::repair_design_cmd $max_wire_length $slew_margin $cap_margin \
+    $pre_placement $match_cell_footprint $reroute $verbose
 }
 
 sta::define_cmd_args "repair_clock_nets" {[-max_wire_length max_wire_length]}
 
 proc repair_clock_nets { args } {
   sta::parse_key_args "repair_clock_nets" args \
-    keys {-max_wire_length -buffer_cell} \
+    keys {-max_wire_length} \
     flags {}
-  
-  if { [info exists keys(-buffer_cell)] } {
-    utl::warn RSZ 18 "-buffer_cell is deprecated."
-  }
+
   set max_wire_length [rsz::parse_max_wire_length keys]
-  
+
+
   sta::check_argc_eq0 "repair_clock_nets" $args
-  rsz::check_parasitics
-  rsz::resizer_preamble
-  set max_wire_length [rsz::check_max_wire_length $max_wire_length]
+  est::check_parasitics
+  set max_wire_length [rsz::check_max_wire_length $max_wire_length true]
   rsz::repair_clk_nets_cmd $max_wire_length
 }
 
-sta::define_cmd_args "repair_clock_inverters" {-buffer_cell buffer_cell}
+sta::define_cmd_args "repair_clock_inverters" {}
 
 proc repair_clock_inverters { args } {
+  sta::parse_key_args "repair_clock_inverters" args keys {} flags {}
   sta::check_argc_eq0 "repair_clock_inverters" $args
   rsz::repair_clk_inverters_cmd
 }
 
-sta::define_cmd_args "repair_tie_fanout" {lib_port [-separation dist] [-verbose]}
+sta::define_cmd_args "repair_tie_fanout" {lib_port\
+                                         [-separation dist]\
+                                         [-max_fanout fanout]\
+                                         [-verbose]}
 
 proc repair_tie_fanout { args } {
   sta::parse_key_args "repair_tie_fanout" args keys {-separation -max_fanout} \
     flags {-verbose}
-  
+
   set separation 0
   if { [info exists keys(-separation)] } {
     set separation $keys(-separation)
@@ -348,7 +237,7 @@ proc repair_tie_fanout { args } {
     set separation [sta::distance_ui_sta $separation]
   }
   set verbose [info exists flags(-verbose)]
-  
+
   sta::check_argc_eq1 "repair_tie_fanout" $args
   set lib_port [lindex $args 0]
   if { ![sta::is_object $lib_port] } {
@@ -363,158 +252,1115 @@ proc repair_tie_fanout { args } {
   }
 }
 
-sta::define_cmd_args "repair_hold_violations" {[-allow_setup_violations]}
 
-proc repair_hold_violations { args } {
-  sta::parse_key_args "repair_hold_violations" args \
-    keys {-buffer_cell} \
-    flags {-allow_setup_violations}
-  
-  set allow_setup_violations [info exists flags(-allow_setup_violations)]
-  sta::check_argc_eq0 "repair_hold_violations" $args
-  utl::warn RSZ 19 "repair_hold_violations is deprecated. Use repair_timing -hold"
-  
-  rsz::check_parasitics
-  rsz::resizer_preamble
-  rsz::repair_hold 0.0 $allow_setup_violations $max_buffer_percent
-}
-
+# -max_passes is for developer debugging so intentionally not documented
+# in define_cmd_args
 sta::define_cmd_args "repair_timing" {[-setup] [-hold]\
+                                        [-recover_power percent_of_paths_with_slack]\
+                                        [-setup_margin setup_margin]\
+                                        [-hold_margin hold_margin]\
                                         [-slack_margin slack_margin]\
-                                        [-max_buffer_percent buffer_percent]\
+                                        [-libraries libs]\
                                         [-allow_setup_violations]\
-                                        [-max_utilization util]}
+                                        [-sequence move_list]\
+                                        [-phases phases]\
+                                        [-path_group path_group]\
+                                        [-skip_pin_swap]\
+                                        [-skip_gate_cloning]\
+                                        [-skip_size_down]\
+                                        [-skip_buffering]\
+                                        [-skip_buffer_removal]\
+                                        [-skip_buffer_to_inverters]\
+                                        [-skip_last_gasp]\
+                                        [-skip_vt_swap]\
+                                        [-skip_crit_vt_swap]\
+                                        [-skip_crpr]\
+                                        [-effort low|medium|high]\
+                                        [-profile_mode mode]\
+                                        [-profile_dir dir]\
+                                        [-repair_tns tns_end_percent]\
+                                        [-max_passes passes]\
+                                        [-max_iterations iterations]\
+                                        [-max_buffer_percent buffer_percent]\
+                                        [-max_utilization util] \
+                                        [-match_cell_footprint] \
+                                        [-max_repairs_per_pass max_repairs_per_pass]\
+                                        [-verbose]}
 
 proc repair_timing { args } {
+  # `-phases` is the public spelling listed in -help / define_cmd_args.
+  # `-policy` and `-policies` are accepted-but-undocumented aliases for the
+  # same phase sequence; only one of the three may be supplied per call.
   sta::parse_key_args "repair_timing" args \
-    keys {-slack_margin -libraries -max_utilization -max_buffer_percent} \
-    flags {-setup -hold -allow_setup_violations}
-  
-  if { [info exists keys(-libraries)] } {
-    utl::warn RSZ 63 "-libraries is deprecated."
-  }
-  
+    keys {-setup_margin -hold_margin -slack_margin \
+            -libraries -max_utilization -max_buffer_percent -sequence \
+            -phases -policy -policies -path_group -effort -profile_mode -profile_dir \
+            -recover_power -repair_tns -max_passes -max_iterations -max_repairs_per_pass} \
+    flags {-setup -hold -allow_setup_violations -skip_pin_swap -skip_gate_cloning \
+             -skip_size_down -skip_buffering -skip_buffer_removal -skip_buffer_to_inverters \
+             -skip_last_gasp -skip_vt_swap -skip_crit_vt_swap -skip_crpr \
+             -match_cell_footprint -verbose}
+
   set setup [info exists flags(-setup)]
   set hold [info exists flags(-hold)]
+
   if { !$setup && !$hold } {
     set setup 1
     set hold 1
   }
-  
-  set slack_margin [rsz::parse_slack_margin_arg keys]
+
+  if { [info exists keys(-slack_margin)] } {
+    utl::warn RSZ 76 "-slack_margin is deprecated. Use -setup_margin/-hold_margin"
+    if { !$setup && $hold } {
+      set setup_margin 0.0
+      set hold_margin [rsz::parse_time_margin_arg "-slack_margin" keys]
+    } else {
+      set setup_margin [rsz::parse_time_margin_arg "-slack_margin" keys]
+      set hold_margin 0.0
+    }
+  } else {
+    set setup_margin [rsz::parse_time_margin_arg "-setup_margin" keys]
+    set hold_margin [rsz::parse_time_margin_arg "-hold_margin" keys]
+  }
+
+  if { [info exists keys(-sequence)] } {
+    set sequence $keys(-sequence)
+  } else {
+    set sequence ""
+  }
+
+  # Resolve -phases / -policy / -policies aliases to a single `phases` value.
+  # All three carry identical semantics; rejecting more than one prevents
+  # silent precedence surprises if the user mixes spellings.
+  set phases ""
+  set phase_alias_count 0
+  foreach alias_key {-phases -policy -policies} {
+    if { [info exists keys($alias_key)] } {
+      incr phase_alias_count
+      set phases $keys($alias_key)
+    }
+  }
+  if { $phase_alias_count > 1 } {
+    utl::error RSZ 222 \
+      "specify at most one of -phases / -policy / -policies"
+  }
+
+  # Unknown names warn and resolve to "", which repairs every path group.
+  set path_group ""
+  if { [info exists keys(-path_group)] } {
+    set path_group [rsz::resolve_path_group $keys(-path_group)]
+  }
+
   set allow_setup_violations [info exists flags(-allow_setup_violations)]
+  set skip_pin_swap [info exists flags(-skip_pin_swap)]
+  set skip_gate_cloning [info exists flags(-skip_gate_cloning)]
+  set skip_size_down_fanout [info exists flags(-skip_size_down)]
+  set skip_buffering [info exists flags(-skip_buffering)]
+  set skip_buffer_removal [info exists flags(-skip_buffer_removal)]
+  set skip_buffer_to_inverters [info exists flags(-skip_buffer_to_inverters)]
+  set skip_last_gasp [info exists flags(-skip_last_gasp)]
+  set skip_vt_swap [info exists flags(-skip_vt_swap)]
+  set skip_crit_vt_swap [info exists flags(-skip_crit_vt_swap)]
+  set skip_crpr [info exists flags(-skip_crpr)]
+  set effort "high"
+  if { [info exists keys(-effort)] } {
+    set effort $keys(-effort)
+    if { [lsearch -exact [string toupper $phases] "PARALLEL_EVAL"] == -1 } {
+      utl::warn RSZ 3244 "-effort has no effect unless -phases lists PARALLEL_EVAL."
+    }
+  }
+  # Setup repair profiler level and output directory; 0 writes nothing.
+  set profile_mode 0
+  if { [info exists keys(-profile_mode)] } {
+    set profile_mode $keys(-profile_mode)
+    sta::check_integer "-profile_mode" $profile_mode
+  }
+  set profile_dir ""
+  if { [info exists keys(-profile_dir)] } {
+    set profile_dir $keys(-profile_dir)
+    if { $profile_mode == 0 } {
+      utl::warn RSZ 3245 "-profile_dir has no effect without -profile_mode."
+    }
+  }
   rsz::set_max_utilization [rsz::parse_max_util keys]
-  
   set max_buffer_percent 20
   if { [info exists keys(-max_buffer_percent)] } {
     set max_buffer_percent $keys(-max_buffer_percent)
-    sta::check_positive_float "-max_buffer_percent" $max_buffer_percent
-    set max_buffer_percent [expr $max_buffer_percent / 100.0]
+    sta::check_percent "-max_buffer_percent" $max_buffer_percent
   }
-  
+  set max_buffer_percent [expr $max_buffer_percent / 100.0]
+
+  set repair_tns_end_percent 1.0
+  if { [info exists keys(-repair_tns)] } {
+    set repair_tns_end_percent $keys(-repair_tns)
+    sta::check_percent "-repair_tns" $repair_tns_end_percent
+    set repair_tns_end_percent [expr $repair_tns_end_percent / 100.0]
+  }
+
+  set recover_power_percent -1
+  if { [info exists keys(-recover_power)] } {
+    set recover_power_percent $keys(-recover_power)
+    sta::check_percent "-recover_power" $recover_power_percent
+    set recover_power_percent [expr $recover_power_percent / 100.0]
+  }
+
+  set verbose 0
+  if { [info exists flags(-verbose)] } {
+    set verbose 1
+  }
+
+  set max_passes 10000
+  if { [info exists keys(-max_passes)] } {
+    set max_passes $keys(-max_passes)
+  }
+
+  set max_iterations -1
+  if { [info exists keys(-max_iterations)] } {
+    set max_iterations $keys(-max_iterations)
+  }
+
+  set match_cell_footprint [info exists flags(-match_cell_footprint)]
+  if { [design_is_routed] } {
+    est::set_parasitics_src "detailed_routing"
+  }
+
+  set max_repairs_per_pass 1
+  if { [info exists keys(-max_repairs_per_pass)] } {
+    set max_repairs_per_pass $keys(-max_repairs_per_pass)
+  }
+  # The pass options drive the per-endpoint policies only.
+  if { [info exists keys(-max_passes)] || [info exists keys(-max_repairs_per_pass)] } {
+    set pass_phases [lsearch -all -inline -not -exact [string toupper $phases] "PARALLEL_EVAL"]
+    if { $phases ne "" && [llength $pass_phases] == 0 } {
+      utl::warn RSZ 3246 \
+        "-max_passes and -max_repairs_per_pass have no effect on the PARALLEL_EVAL policy."
+    }
+  }
+
   sta::check_argc_eq0 "repair_timing" $args
-  rsz::check_parasitics
-  rsz::resizer_preamble
-  if { $setup } {
-    rsz::repair_setup $slack_margin
+  est::check_parasitics
+
+  set recovered_power 0
+  set repaired_setup 0
+  set repaired_hold 0
+  if { $recover_power_percent >= 0 } {
+    set recovered_power [rsz::recover_power $recover_power_percent $match_cell_footprint $verbose]
+  } else {
+    # Restore the command-entry CRPR setting after setup and hold repair.
+    set entry_crpr_enabled [sta::crpr_enabled]
+    set repair_crpr_enabled [expr { $entry_crpr_enabled && !$skip_crpr }]
+    try {
+      if { $setup } {
+        if { $skip_crpr } {
+          utl::info RSZ 225 "CRPR disabled during setup repair."
+        }
+        if { [sta::crpr_enabled] != $repair_crpr_enabled } {
+          sta::set_crpr_enabled $repair_crpr_enabled
+        }
+        set repaired_setup [rsz::repair_setup $setup_margin $repair_tns_end_percent $max_passes \
+          $max_iterations $max_repairs_per_pass $match_cell_footprint $verbose \
+          $sequence $phases $path_group \
+          $skip_pin_swap $skip_gate_cloning $skip_size_down_fanout $skip_buffering \
+          $skip_buffer_removal $skip_buffer_to_inverters $skip_last_gasp $skip_vt_swap \
+          $skip_crit_vt_swap $effort $profile_mode $profile_dir]
+      }
+      if { $hold } {
+        if { $skip_crpr } {
+          utl::info RSZ 226 "CRPR disabled during hold repair."
+        }
+        if { [sta::crpr_enabled] != $repair_crpr_enabled } {
+          sta::set_crpr_enabled $repair_crpr_enabled
+        }
+        set repaired_hold [rsz::repair_hold $setup_margin $hold_margin \
+          $allow_setup_violations $max_buffer_percent $max_passes \
+          $max_iterations $match_cell_footprint $verbose $path_group]
+      }
+    } finally {
+      if { [sta::crpr_enabled] != $entry_crpr_enabled } {
+        sta::set_crpr_enabled $entry_crpr_enabled
+      }
+    }
   }
-  if { $hold } {
-    rsz::repair_hold $slack_margin $allow_setup_violations $max_buffer_percent
-  }
+
+  return [expr $recovered_power || $repaired_setup || $repaired_hold]
 }
 
 ################################################################
 
 sta::define_cmd_args "report_design_area" {}
 
-proc report_design_area {} {
+proc report_design_area { args } {
+  sta::parse_key_args "report_design_area" args keys {} flags {}
   set util [format %.0f [expr [rsz::utilization] * 100]]
-  set area [sta::format_area [rsz::design_area] 0]
-  utl::report "Design area ${area} u^2 ${util}% utilization."
+  set area [format %.0f [expr [rsz::design_area] * 1e6 * 1e6]]
+  utl::report "Design area ${area} um^2 ${util}% utilization."
 }
 
-sta::define_cmd_args "report_floating_nets" {[-verbose]}
+sta::define_cmd_args "report_floating_nets" {[-verbose] [> filename] [>> filename]}
 
-proc report_floating_nets { args } {
+sta::proc_redirect report_floating_nets {
   sta::parse_key_args "report_floating_nets" args keys {} flags {-verbose}
-  
+
   set verbose [info exists flags(-verbose)]
   set floating_nets [rsz::find_floating_nets]
+  set floating_pins [rsz::find_floating_pins]
   set floating_net_count [llength $floating_nets]
+  set floating_pin_count [llength $floating_pins]
   if { $floating_net_count > 0 } {
-    utl::warn RSZ 20 "found $floating_net_count floatiing nets."
+    utl::warn RSZ 20 "found $floating_net_count floating nets."
     if { $verbose } {
       foreach net $floating_nets {
         utl::report " [get_full_name $net]"
       }
     }
   }
+  if { $floating_pin_count > 0 } {
+    utl::warn RSZ 95 "found $floating_pin_count floating pins."
+    if { $verbose } {
+      foreach pin $floating_pins {
+        utl::report " [get_full_name $pin]"
+      }
+    }
+  }
+
+  utl::metric_integer "timing__drv__floating__nets" $floating_net_count
+  utl::metric_integer "timing__drv__floating__pins" $floating_pin_count
 }
 
-sta::define_cmd_args "report_long_wires" {count}
+sta::define_cmd_args "report_overdriven_nets" {[-include_parallel_driven] \
+                                               [-verbose] \
+                                               [> filename] \
+                                               [>> filename]}
+
+sta::proc_redirect report_overdriven_nets {
+  sta::parse_key_args "report_overdriven_nets" args \
+    keys {} \
+    flags {-verbose -include_parallel_driven}
+
+  set verbose [info exists flags(-verbose)]
+  set overdriven_nets [rsz::find_overdriven_nets [info exists flags(-include_parallel_driven)]]
+  set overdriven_net_count [llength $overdriven_nets]
+  if { $overdriven_net_count > 0 } {
+    utl::warn RSZ 24 "found $overdriven_net_count overdriven nets."
+    if { $verbose } {
+      foreach net $overdriven_nets {
+        utl::report " [get_full_name $net]"
+      }
+    }
+  }
+
+  utl::metric_integer "timing__drv__overdriven__nets" $overdriven_net_count
+}
+
+sta::define_cmd_args "report_long_wires" {count [> filename] [>> filename]} ;# checker off
 
 sta::proc_redirect report_long_wires {
   global sta_report_default_digits
-  
-  sta::parse_key_args "report_long_wires" args keys {-digits} flags {}
-  
+
+  sta::parse_key_args "report_long_wires" args keys {-digits} flags {};# checker off
+
   set digits $sta_report_default_digits
   if { [info exists keys(-digits)] } {
     set digits $keys(-digits)
   }
-  
+
   sta::check_argc_eq1 "report_long_wires" $args
   set count [lindex $args 0]
   rsz::report_long_wires_cmd $count $digits
 }
 
-namespace eval rsz {
-  
-# for testing resizing separately
-proc resize { args } {
-  sta::check_argc_eq0 "resize" $args
-  check_parasitics
-  resizer_preamble
-  resize_to_target_slew
+sta::define_cmd_args "eliminate_dead_logic" {} ;# checker off
+proc eliminate_dead_logic { } {
+  rsz::eliminate_dead_logic_cmd 1
 }
-  
+
+namespace eval rsz {
+proc get_block { } {
+  set db [ord::get_db]
+  if { $db eq "NULL" } {
+    utl::error "RSZ" 200 "db needs to be defined for set_opt_config and related commands."
+  }
+  set chip [$db getChip]
+  if { $chip eq "NULL" } {
+    utl::error "RSZ" 201 "chip needs to be defined for set_opt_config and related commands."
+  }
+  set block [$chip getBlock]
+  if { $block eq "NULL" } {
+    utl::error "RSZ" 202 "block needs to be defined for set_opt_config and related commands."
+  }
+  return $block
+}
+
+proc set_positive_double_prop { value opt_name prop_name } {
+  sta::check_positive_float $opt_name $value
+  set block [get_block]
+  set prop [odb::dbDoubleProperty_find $block $prop_name]
+  if { $prop eq "NULL" } {
+    odb::dbDoubleProperty_create $block $prop_name $value
+  } else {
+    $prop setValue $value
+  }
+}
+
+proc set_boolean_prop { value opt_name prop_name } {
+  if { ![string is boolean $value] } {
+    utl::error "RSZ" 209 \
+      "$opt_name argument should be Boolean"
+  }
+  set block [get_block]
+  set prop [odb::dbBoolProperty_find $block $prop_name]
+  if { $prop eq "NULL" } {
+    odb::dbBoolProperty_create $block $prop_name $value
+  } else {
+    $prop setValue $value
+  }
+}
+
+proc clear_double_prop { name } {
+  set block [get_block]
+  set prop [odb::dbDoubleProperty_find $block $name]
+  if { $prop ne "NULL" && $prop ne "" } {
+    odb::dbProperty_destroy $prop
+  }
+}
+
+proc clear_bool_prop { name } {
+  set block [get_block]
+  set prop [odb::dbBoolProperty_find $block $name]
+  if { $prop ne "NULL" && $prop ne "" } {
+    odb::dbProperty_destroy $prop
+  }
+}
+
+proc set_double_prop { value opt_name prop_name } {
+  sta::check_float $opt_name $value
+  set block [get_block]
+  set prop [odb::dbDoubleProperty_find $block $prop_name]
+  if { $prop eq "NULL" } {
+    odb::dbDoubleProperty_create $block $prop_name $value
+  } else {
+    $prop setValue $value
+  }
+}
+
+proc set_positive_int_prop { value opt_name prop_name } {
+  sta::check_positive_integer $opt_name $value
+  set block [get_block]
+  set prop [odb::dbIntProperty_find $block $prop_name]
+  if { $prop eq "NULL" } {
+    odb::dbIntProperty_create $block $prop_name $value
+  } else {
+    $prop setValue $value
+  }
+}
+
+proc set_string_prop { value opt_name prop_name allowed } {
+  if { [lsearch -exact $allowed $value] < 0 } {
+    utl::error "RSZ" 417 \
+      "$opt_name argument '$value' is not one of: [join $allowed {, }]"
+  }
+  set block [get_block]
+  set prop [odb::dbStringProperty_find $block $prop_name]
+  if { $prop eq "NULL" } {
+    odb::dbStringProperty_create $block $prop_name $value
+  } else {
+    $prop setValue $value
+  }
+}
+
+proc clear_int_prop { name } {
+  set block [get_block]
+  set prop [odb::dbIntProperty_find $block $name]
+  if { $prop ne "NULL" && $prop ne "" } {
+    odb::dbProperty_destroy $prop
+  }
+}
+
+proc clear_string_prop { name } {
+  set block [get_block]
+  set prop [odb::dbStringProperty_find $block $name]
+  if { $prop ne "NULL" && $prop ne "" } {
+    odb::dbProperty_destroy $prop
+  }
+}
+}
+
+sta::define_cmd_args "set_opt_config" { [-limit_sizing_area] \
+                                          [-limit_sizing_leakage] \
+                                          [-keep_sizing_site] \
+                                          [-keep_sizing_vt] \
+                                          [-sizing_area_limit] \
+                                          [-sizing_leakage_limit] \
+                                          [-set_early_sizing_cap_ratio] \
+                                          [-set_early_buffer_sizing_cap_ratio] \
+                                          [-disable_buffer_pruning] \
+                                          [-rebuffer_size_driver] }
+
+proc set_opt_config { args } {
+  sta::parse_key_args "set_opt_config" args \
+    keys {-limit_sizing_area -limit_sizing_leakage -sizing_area_limit \
+      -sizing_leakage_limit -keep_sizing_site -keep_sizing_vt -disable_buffer_pruning \
+      -set_early_sizing_cap_ratio -set_early_buffer_sizing_cap_ratio \
+      -rebuffer_size_driver} flags {}
+
+  set area_limit "NULL"
+  if { [info exists keys(-limit_sizing_area)] } {
+    set area_limit $keys(-limit_sizing_area)
+  } elseif { [info exists keys(-sizing_area_limit)] } {
+    set area_limit $keys(-sizing_area_limit)
+  }
+  if { $area_limit ne "NULL" } {
+    rsz::set_positive_double_prop \
+      $area_limit "-sizing_area_limit" "limit_sizing_area"
+    utl::info RSZ 100 \
+      "Cells with area > ${area_limit}X current cell will not be considered for sizing"
+  }
+
+  set leakage_limit "NULL"
+  if { [info exists keys(-limit_sizing_leakage)] } {
+    set leakage_limit $keys(-limit_sizing_leakage)
+  } elseif { [info exists keys(-sizing_leakage_limit)] } {
+    set leakage_limit $keys(-sizing_leakage_limit)
+  }
+  if { $leakage_limit ne "NULL" } {
+    rsz::set_positive_double_prop \
+      $leakage_limit "-sizing_leakage_limit" "limit_sizing_leakage"
+    utl::info RSZ 101 \
+      "Cells with leakage > ${leakage_limit}X current cell will not be considered for sizing"
+  }
+
+  if { [info exists keys(-keep_sizing_site)] } {
+    rsz::set_boolean_prop $keys(-keep_sizing_site) "-keep_sizing_site" "keep_sizing_site"
+    utl::info RSZ 104 \
+      "Cell's site will be preserved for sizing"
+  }
+
+  if { [info exists keys(-keep_sizing_vt)] } {
+    rsz::set_boolean_prop $keys(-keep_sizing_vt) "-keep_sizing_vt" "keep_sizing_vt"
+    utl::info RSZ 106 \
+      "Cell's VT type will be preserved for sizing"
+  }
+
+  if { [info exists keys(-set_early_sizing_cap_ratio)] } {
+    set value $keys(-set_early_sizing_cap_ratio)
+    rsz::set_positive_double_prop $value "-set_early_sizing_cap_ratio" "early_sizing_cap_ratio"
+    utl::info RSZ 145 \
+      "Early cell sizing will use capacitance ratio of value $value"
+  }
+
+  if { [info exists keys(-set_early_buffer_sizing_cap_ratio)] } {
+    set value $keys(-set_early_buffer_sizing_cap_ratio)
+    rsz::set_positive_double_prop $value "-set_early_buffer_sizing_cap_ratio" \
+      "early_buffer_sizing_cap_ratio"
+    utl::info RSZ 147 \
+      "Early buffer sizing will use capacitance ratio of value $value"
+  }
+
+  if { [info exists keys(-disable_buffer_pruning)] } {
+    set disable_val $keys(-disable_buffer_pruning)
+    rsz::set_boolean_prop $disable_val "-disable_buffer_pruning" \
+      "disable_buffer_pruning"
+    if { $disable_val } {
+      utl::info RSZ 165 \
+        "Buffer pruning will be disabled to enable all buffers for repair_design and repair_timing"
+    } else {
+      utl::info RSZ 167 \
+        "Buffer pruning will be enabled for repair_design and repair_timing"
+    }
+  }
+
+  if { [info exists keys(-rebuffer_size_driver)] } {
+    set value $keys(-rebuffer_size_driver)
+    rsz::set_boolean_prop $value "-rebuffer_size_driver" "rebuffer_size_driver"
+    if { $value } {
+      utl::info RSZ 173 \
+        "Rebuffering will size drivers together with buffer trees"
+    } else {
+      utl::info RSZ 174 \
+        "Rebuffering will not size drivers"
+    }
+  }
+}
+
+sta::define_cmd_args "reset_opt_config" { [-limit_sizing_area] \
+                                            [-limit_sizing_leakage] \
+                                            [-keep_sizing_site] \
+                                            [-keep_sizing_vt] \
+                                            [-sizing_area_limit] \
+                                            [-sizing_leakage_limit] \
+                                            [-set_early_sizing_cap_ratio] \
+                                            [-set_early_buffer_sizing_cap_ratio] \
+                                            [-disable_buffer_pruning] \
+                                            [-rebuffer_size_driver] }
+
+proc reset_opt_config { args } {
+  sta::parse_key_args "reset_opt_config" args \
+    keys {} flags {-limit_sizing_area -limit_sizing_leakage -keep_sizing_site \
+                     -sizing_area_limit -sizing_leakage_limit -keep_sizing_vt \
+                     -set_early_sizing_cap_ratio -set_early_buffer_sizing_cap_ratio \
+                     -disable_buffer_pruning -rebuffer_size_driver}
+  set reset_all [expr { [array size flags] == 0 }]
+
+  if {
+    $reset_all || [info exists flags(-limit_sizing_area)]
+    || [info exists flags(-sizing_area_limit)]
+  } {
+    rsz::clear_double_prop "limit_sizing_area"
+    utl::info RSZ 102 "Cell sizing restriction based on area has been removed."
+  }
+  if {
+    $reset_all || [info exists flags(-limit_sizing_leakage)]
+    || [info exists flags(-sizing_leakage_limit)]
+  } {
+    rsz::clear_double_prop "limit_sizing_leakage"
+    utl::info RSZ 103 "Cell sizing restriction based on leakage has been removed."
+  }
+  if { $reset_all || [info exists flags(-keep_sizing_site)] } {
+    rsz::clear_bool_prop "keep_sizing_site"
+    utl::info RSZ 105 "Cell sizing restriction based on site has been removed."
+  }
+  if { $reset_all || [info exists flags(-keep_sizing_vt)] } {
+    rsz::clear_bool_prop "keep_sizing_vt"
+    utl::info RSZ 107 "Cell sizing restriction based on VT type has been removed."
+  }
+  if { $reset_all || [info exists flags(-set_early_sizing_cap_ratio)] } {
+    rsz::clear_double_prop "early_sizing_cap_ratio"
+    utl::info RSZ 146 "Capacitance ratio for early cell sizing has been unset."
+  }
+  if { $reset_all || [info exists flags(-set_early_buffer_sizing_cap_ratio)] } {
+    rsz::clear_double_prop "early_buffer_sizing_cap_ratio"
+    utl::info RSZ 148 "Capacitance ratio for early buffer sizing has been unset."
+  }
+  if { $reset_all || [info exists flags(-disable_buffer_pruning)] } {
+    rsz::clear_bool_prop "disable_buffer_pruning"
+    utl::info RSZ 166 "Buffer pruning has been enabled."
+  }
+  if { $reset_all || [info exists flags(-rebuffer_size_driver)] } {
+    rsz::clear_bool_prop "rebuffer_size_driver"
+    utl::info RSZ 175 "Driver sizing during rebuffering has been disabled."
+  }
+}
+
+sta::define_cmd_args "report_opt_config" {}
+
+proc report_opt_config { args } {
+  sta::parse_key_args "report_opt_config" args keys {} flags {}
+  set block [rsz::get_block]
+
+  set area_limit_value "undefined"
+  set area_limit [odb::dbDoubleProperty_find $block "limit_sizing_area"]
+  if { $area_limit ne "NULL" && $area_limit ne "" } {
+    set area_limit_value [$area_limit getValue]
+  }
+
+  set leakage_limit_value "undefined"
+  set leakage_limit [odb::dbDoubleProperty_find $block "limit_sizing_leakage"]
+  if { $leakage_limit ne "NULL" && $leakage_limit ne "" } {
+    set leakage_limit_value [$leakage_limit getValue]
+  }
+
+  set keep_site_value "false"
+  set keep_site [odb::dbBoolProperty_find $block "keep_sizing_site"]
+  if { $keep_site ne "NULL" && $keep_site ne "" } {
+    set keep_site_result [$keep_site getValue]
+    set keep_site_value [expr { $keep_site_result ? "true" : "false" }]
+  }
+
+  set keep_sizing_vt "false"
+  set keep_vt [odb::dbBoolProperty_find $block "keep_sizing_vt"]
+  if { $keep_vt ne "NULL" && $keep_vt ne "" } {
+    set keep_vt_value [$keep_vt getValue]
+    set keep_sizing_vt [expr { $keep_vt_value ? "true" : "false" }]
+  }
+
+  set sizing_cap_ratio "unset"
+  set cap_ratio_prop [odb::dbDoubleProperty_find $block "early_sizing_cap_ratio"]
+  if { $cap_ratio_prop ne "NULL" && $cap_ratio_prop ne "" } {
+    set sizing_cap_ratio [$cap_ratio_prop getValue]
+  }
+
+  set buffer_cap_ratio "unset"
+  set buffer_cap_ratio_prop [odb::dbDoubleProperty_find $block "early_buffer_sizing_cap_ratio"]
+  if { $buffer_cap_ratio_prop ne "NULL" && $buffer_cap_ratio_prop ne "" } {
+    set buffer_cap_ratio [$buffer_cap_ratio_prop getValue]
+  }
+
+  set disable_buffer_pruning "false"
+  set no_buffer_pruning [odb::dbBoolProperty_find $block "disable_buffer_pruning"]
+  if { $no_buffer_pruning ne "NULL" && $no_buffer_pruning ne "" } {
+    set no_buffer_pruning_value [$no_buffer_pruning getValue]
+    set disable_buffer_pruning [expr { $no_buffer_pruning_value ? "true" : "false" }]
+  }
+
+  set rebuffer_size_driver "false"
+  set size_driver_prop [odb::dbBoolProperty_find $block "rebuffer_size_driver"]
+  if { $size_driver_prop ne "NULL" && $size_driver_prop ne "" } {
+    set size_driver_value [$size_driver_prop getValue]
+    set rebuffer_size_driver [expr { $size_driver_value ? "true" : "false" }]
+  }
+
+  puts "*******************************************"
+  puts "Optimization config:"
+  puts "-limit_sizing_area:                 $area_limit_value"
+  puts "-limit_sizing_leakage:              $leakage_limit_value"
+  puts "-keep_sizing_site:                  $keep_site_value"
+  puts "-keep_sizing_vt:                    $keep_sizing_vt"
+  puts "-set_early_sizing_cap_ratio:        $sizing_cap_ratio"
+  puts "-set_early_buffer_sizing_cap_ratio: $buffer_cap_ratio"
+  puts "-disable_buffer_pruning:            $disable_buffer_pruning"
+  puts "-rebuffer_size_driver:              $rebuffer_size_driver"
+  puts "*******************************************"
+}
+
+# Global sizing (Lagrangian-Relaxation) configuration. Knobs only affect the
+# `repair_timing -phases GLOBAL_SIZING` policy; values persist as dbProperties
+# on the block (gs_* names on disk).
+sta::define_cmd_args "set_global_sizing_config" { \
+    [-presize_mode mode] \
+    [-include_clock_network bool] \
+    [-setup_slack_margin margin] \
+    [-max_iterations iterations] \
+    [-beta value] \
+    [-mu_exponent value] \
+    [-lambda_floor value] \
+    [-timing_bias value] \
+    [-budget_safety_factor value] }
+
+proc set_global_sizing_config { args } {
+  sta::parse_key_args "set_global_sizing_config" args \
+    keys {-presize_mode -include_clock_network -setup_slack_margin \
+            -max_iterations -beta -mu_exponent -lambda_floor -timing_bias \
+            -budget_safety_factor} flags {}
+
+  if { [info exists keys(-presize_mode)] } {
+    rsz::set_string_prop $keys(-presize_mode) "-presize_mode" \
+      "gs_presize_mode" {disabled min_size_max_vt max_size_min_vt}
+  }
+  if { [info exists keys(-include_clock_network)] } {
+    rsz::set_boolean_prop $keys(-include_clock_network) \
+      "-include_clock_network" "gs_include_clock_network"
+  }
+  if { [info exists keys(-setup_slack_margin)] } {
+    rsz::set_double_prop $keys(-setup_slack_margin) \
+      "-setup_slack_margin" "gs_setup_slack_margin"
+  }
+  if { [info exists keys(-max_iterations)] } {
+    rsz::set_positive_int_prop $keys(-max_iterations) \
+      "-max_iterations" "gs_max_iterations"
+  }
+  if { [info exists keys(-beta)] } {
+    rsz::set_positive_double_prop $keys(-beta) "-beta" "gs_beta"
+  }
+  if { [info exists keys(-mu_exponent)] } {
+    rsz::set_positive_double_prop $keys(-mu_exponent) \
+      "-mu_exponent" "gs_mu_exponent"
+  }
+  if { [info exists keys(-lambda_floor)] } {
+    rsz::set_positive_double_prop $keys(-lambda_floor) \
+      "-lambda_floor" "gs_lambda_floor"
+  }
+  if { [info exists keys(-timing_bias)] } {
+    rsz::set_positive_double_prop $keys(-timing_bias) \
+      "-timing_bias" "gs_timing_bias"
+  }
+  if { [info exists keys(-budget_safety_factor)] } {
+    rsz::set_positive_double_prop $keys(-budget_safety_factor) \
+      "-budget_safety_factor" "gs_budget_safety_factor"
+  }
+}
+
+sta::define_cmd_args "reset_global_sizing_config" { \
+    [-presize_mode] \
+    [-include_clock_network] \
+    [-setup_slack_margin] \
+    [-max_iterations] \
+    [-beta] \
+    [-mu_exponent] \
+    [-lambda_floor] \
+    [-timing_bias] \
+    [-budget_safety_factor] }
+
+proc reset_global_sizing_config { args } {
+  sta::parse_key_args "reset_global_sizing_config" args \
+    keys {} flags {-presize_mode -include_clock_network -setup_slack_margin \
+                     -max_iterations -beta -mu_exponent -lambda_floor \
+                     -timing_bias -budget_safety_factor}
+  set reset_all [expr { [array size flags] == 0 }]
+
+  if { $reset_all || [info exists flags(-presize_mode)] } {
+    rsz::clear_string_prop "gs_presize_mode"
+  }
+  if { $reset_all || [info exists flags(-include_clock_network)] } {
+    rsz::clear_bool_prop "gs_include_clock_network"
+  }
+  if { $reset_all || [info exists flags(-setup_slack_margin)] } {
+    rsz::clear_double_prop "gs_setup_slack_margin"
+  }
+  if { $reset_all || [info exists flags(-max_iterations)] } {
+    rsz::clear_int_prop "gs_max_iterations"
+  }
+  if { $reset_all || [info exists flags(-beta)] } {
+    rsz::clear_double_prop "gs_beta"
+  }
+  if { $reset_all || [info exists flags(-mu_exponent)] } {
+    rsz::clear_double_prop "gs_mu_exponent"
+  }
+  if { $reset_all || [info exists flags(-lambda_floor)] } {
+    rsz::clear_double_prop "gs_lambda_floor"
+  }
+  if { $reset_all || [info exists flags(-timing_bias)] } {
+    rsz::clear_double_prop "gs_timing_bias"
+  }
+  if { $reset_all || [info exists flags(-budget_safety_factor)] } {
+    rsz::clear_double_prop "gs_budget_safety_factor"
+  }
+}
+
+sta::define_cmd_args "report_global_sizing_config" {}
+
+proc report_global_sizing_config { args } {
+  sta::parse_key_args "report_global_sizing_config" args keys {} flags {}
+  set block [rsz::get_block]
+
+  set presize_mode_value "undefined"
+  set prop [odb::dbStringProperty_find $block "gs_presize_mode"]
+  if { $prop ne "NULL" && $prop ne "" } {
+    set presize_mode_value [$prop getValue]
+  }
+
+  set include_clock_network_value "undefined"
+  set prop [odb::dbBoolProperty_find $block "gs_include_clock_network"]
+  if { $prop ne "NULL" && $prop ne "" } {
+    set v [$prop getValue]
+    set include_clock_network_value [expr { $v ? "true" : "false" }]
+  }
+
+  set setup_slack_margin_value "undefined"
+  set prop [odb::dbDoubleProperty_find $block "gs_setup_slack_margin"]
+  if { $prop ne "NULL" && $prop ne "" } {
+    set setup_slack_margin_value [$prop getValue]
+  }
+
+  set max_iterations_value "undefined"
+  set prop [odb::dbIntProperty_find $block "gs_max_iterations"]
+  if { $prop ne "NULL" && $prop ne "" } {
+    set max_iterations_value [$prop getValue]
+  }
+
+  set beta_value "undefined"
+  set prop [odb::dbDoubleProperty_find $block "gs_beta"]
+  if { $prop ne "NULL" && $prop ne "" } {
+    set beta_value [$prop getValue]
+  }
+
+  set mu_exponent_value "undefined"
+  set prop [odb::dbDoubleProperty_find $block "gs_mu_exponent"]
+  if { $prop ne "NULL" && $prop ne "" } {
+    set mu_exponent_value [$prop getValue]
+  }
+
+  set lambda_floor_value "undefined"
+  set prop [odb::dbDoubleProperty_find $block "gs_lambda_floor"]
+  if { $prop ne "NULL" && $prop ne "" } {
+    set lambda_floor_value [$prop getValue]
+  }
+
+  set timing_bias_value "undefined"
+  set prop [odb::dbDoubleProperty_find $block "gs_timing_bias"]
+  if { $prop ne "NULL" && $prop ne "" } {
+    set timing_bias_value [$prop getValue]
+  }
+
+  set budget_safety_factor_value "undefined"
+  set prop [odb::dbDoubleProperty_find $block "gs_budget_safety_factor"]
+  if { $prop ne "NULL" && $prop ne "" } {
+    set budget_safety_factor_value [$prop getValue]
+  }
+
+  puts "*******************************************"
+  puts "Global sizing config:"
+  puts "-presize_mode:           $presize_mode_value"
+  puts "-include_clock_network:  $include_clock_network_value"
+  puts "-setup_slack_margin:     $setup_slack_margin_value"
+  puts "-max_iterations:         $max_iterations_value"
+  puts "-beta:                   $beta_value"
+  puts "-mu_exponent:            $mu_exponent_value"
+  puts "-lambda_floor:           $lambda_floor_value"
+  puts "-timing_bias:            $timing_bias_value"
+  puts "-budget_safety_factor:   $budget_safety_factor_value"
+  puts "*******************************************"
+}
+
+sta::define_cmd_args "report_equiv_cells" { -match_cell_footprint -all -vt }
+
+proc report_equiv_cells { args } {
+  sta::parse_key_args "report_equiv_cells" args keys {} flags {-match_cell_footprint -all -vt}
+  set match_cell_footprint [info exists flags(-match_cell_footprint)]
+  set report_all_cells [info exists flags(-all)]
+  sta::check_argc_eq1 "report_equiv_cells" $args
+  set lib_cell [sta::get_lib_cells_arg "report_equiv_cells" [lindex $args 0] sta::sta_warn]
+  set report_vt_equiv [info exists flags(-vt)]
+  rsz::report_equiv_cells_cmd $lib_cell $match_cell_footprint $report_all_cells $report_vt_equiv
+}
+
+sta::define_cmd_args "replace_arith_modules" { [-path_count num_critical_paths] \
+                                      [-slack_threshold float] \
+                                      [-target opto_goal] }
+
+proc replace_arith_modules { args } {
+  sta::parse_key_args "replace_arith_modules" args \
+    keys {-path_count -slack_threshold -target} \
+    flags {}
+
+  if { [info exists keys(-path_count)] } {
+    set path_count $keys(-path_count)
+  } else {
+    set path_count 1000
+  }
+  if { [info exists keys(-target)] } {
+    set target $keys(-target)
+    if { [lsearch -exact {setup hold power area} $target] == -1 } {
+      utl::error "RSZ" 164 "-target needs to be one of setup, hold, power, area"
+    }
+  } else {
+    set target "setup"
+  }
+  if { [info exists keys(-slack_threshold)] } {
+    set slack_threshold [rsz::parse_time_margin_arg "-slack_threshold" keys]
+  } else {
+    set slack_threshold 0.0
+  }
+
+  puts [format "replace_arith_modules -path_count %s -target %s -slack_threshold %s" \
+    $path_count $target $slack_threshold]
+  rsz::swap_arith_modules_cmd $path_count $target $slack_threshold
+}
+
+sta::define_cmd_args "report_buffers" { [-filtered] }
+
+proc report_buffers { args } {
+  sta::parse_key_args "report_buffers" args keys {} flags {-filtered}
+  set filtered [info exists flags(-filtered)]
+  rsz::report_buffers_cmd $filtered
+}
+
+sta::define_cmd_args "report_delay_estimator_accuracy" {\
+  -inst instance \
+  -lib_cell lib_cell \
+  -estimator estimator \
+  [-delay_levels level] }
+
+proc report_delay_estimator_accuracy { args } {
+  sta::parse_key_args "report_delay_estimator_accuracy" args \
+    keys {-inst -lib_cell -estimator -delay_levels} flags {}
+  sta::check_argc_eq0 "report_delay_estimator_accuracy" $args
+
+  rsz::check_required_keys keys {-inst -lib_cell -estimator}
+
+  set inst [sta::get_instance_error "-inst" $keys(-inst)]
+  set lib_cells [sta::get_lib_cells_arg \
+    "report_delay_estimator_accuracy" $keys(-lib_cell) sta::sta_warn]
+  if { [llength $lib_cells] != 1 } {
+    utl::error RSZ 3204 "-lib_cell must resolve to exactly one liberty cell."
+  }
+  set lib_cell [lindex $lib_cells 0]
+
+  # Estimator name validation is delegated to C++ so that the canonical list
+  # lives in DelayEstimatorReporter::knownEstimatorNames only.
+  set estimator $keys(-estimator)
+  if { ![rsz::is_valid_accuracy_estimator_cmd $estimator] } {
+    utl::error RSZ 3205 \
+      "-estimator must be one of: [rsz::accuracy_estimator_names_cmd]."
+  }
+
+  set delay_levels 0
+  if { [info exists keys(-delay_levels)] } {
+    rsz::check_delay_levels $keys(-delay_levels)
+    set delay_levels $keys(-delay_levels)
+    if { $estimator eq "legacy" } {
+      utl::error RSZ 3208 \
+        "-delay_levels is only valid for non-legacy estimators."
+    }
+  }
+
+  est::check_parasitics
+  rsz::report_delay_estimator_accuracy_cmd \
+    $inst $lib_cell $estimator $delay_levels
+}
+
+sta::define_cmd_args "report_delay_estimator_accuracy_for_rebuffering" {\
+  -inst instance \
+  [-driver_pin pin] \
+  [-delay_levels level] }
+
+proc report_delay_estimator_accuracy_for_rebuffering { args } {
+  sta::parse_key_args "report_delay_estimator_accuracy_for_rebuffering" args \
+    keys {-inst -driver_pin -delay_levels} flags {}
+  sta::check_argc_eq0 "report_delay_estimator_accuracy_for_rebuffering" $args
+
+  rsz::check_required_keys keys {-inst}
+  set inst [sta::get_instance_error "-inst" $keys(-inst)]
+
+  set driver_pin "NULL"
+  if { [info exists keys(-driver_pin)] } {
+    set driver_pin [sta::get_port_pin_error "-driver_pin" $keys(-driver_pin)]
+  }
+
+  set delay_levels 1
+  if { [info exists keys(-delay_levels)] } {
+    rsz::check_delay_levels $keys(-delay_levels)
+    set delay_levels $keys(-delay_levels)
+  }
+
+  est::check_parasitics
+  rsz::report_delay_estimator_accuracy_for_rebuffering_cmd \
+    $inst $driver_pin $delay_levels
+}
+
+sta::define_cmd_args "insert_buffer" { -buffer_cell lib_cell \
+                                       [-net net] \
+                                       [-load_pins list_of_pins] \
+                                       [-location {x y}] \
+                                       [-buffer_name name] \
+                                       [-net_name name] \
+                                       [-load_pins_on_diff_nets] }
+
+proc insert_buffer { args } {
+  sta::parse_key_args "insert_buffer" args \
+    keys {-buffer_cell -location -buffer_name -net_name -net -load_pins} \
+    flags {-load_pins_on_diff_nets}
+
+  set has_net [info exists keys(-net)]
+  set has_loads [info exists keys(-load_pins)]
+
+  # Validate arguments
+  if { !$has_net && !$has_loads } {
+    utl::error RSZ 3011 "One of -net or -load_pins must be specified."
+  }
+
+  set buffer_cell [rsz::parse_buffer_cell keys]
+  if { $buffer_cell eq "NULL" } {
+    utl::error RSZ 3012 "Specify a buffer cell with -buffer_cell."
+  }
+
+  set new_buf_base_name "NULL"
+  if { [info exists keys(-buffer_name)] } {
+    set new_buf_base_name $keys(-buffer_name)
+  }
+
+  set new_net_base_name "NULL"
+  if { [info exists keys(-net_name)] } {
+    set new_net_base_name $keys(-net_name)
+  }
+
+  set has_loc 0
+  set x 0.0
+  set y 0.0
+  if { [info exists keys(-location)] } {
+    set location $keys(-location)
+    if { [llength $location] != 2 } {
+      utl::error RSZ 3013 "-location requires a list of two coordinates {x y}."
+    }
+    set x [lindex $location 0]
+    set y [lindex $location 1]
+    set x [sta::distance_ui_sta $x]
+    set y [sta::distance_ui_sta $y]
+    set has_loc 1
+  }
+
+  if { $has_loads } {
+    set net "NULL"
+    if { $has_net } {
+      set net [sta::get_net_arg "-net" $keys(-net)]
+    }
+    set loads [sta::get_port_pins_error "insert_buffer" $keys(-load_pins)]
+    set load_count [llength $loads]
+    if { $load_count == 1 } {
+      if { $has_net } {
+        utl::warn RSZ 69 "-net argument is ignored if there is only one load pin."
+      }
+
+      # For a single load pin, use insert_buffer_before_load_cmd
+      set pin [lindex $loads 0]
+      return [rsz::insert_buffer_before_load_cmd $pin $buffer_cell $x $y $has_loc \
+        $new_buf_base_name $new_net_base_name]
+    } else {
+      set loads_on_diff_nets [info exists flags(-load_pins_on_diff_nets)]
+      return [rsz::insert_buffer_before_loads_cmd $net $loads $buffer_cell $x $y $has_loc \
+        $new_buf_base_name $new_net_base_name \
+        $loads_on_diff_nets]
+    }
+  }
+
+  if { $has_net } {
+    set net [sta::get_net_arg "-net" $keys(-net)]
+    return [rsz::insert_buffer_after_driver_cmd $net $buffer_cell $x $y $has_loc \
+      $new_buf_base_name $new_net_base_name]
+  }
+}
+
+namespace eval rsz {
 # for testing
 proc repair_setup_pin { end_pin } {
-  check_parasitics
-  resizer_preamble
+  est::check_parasitics
   repair_setup_pin_cmd $end_pin
 }
-  
-proc check_parasitics { } {
-  if { ![have_estimated_parasitics] } {
-    utl::warn RSZ 21 "no estimated parasitics. Using wire load models."
+
+proc set_debug { args } {
+  sta::parse_key_args "set_debug" args \
+    keys { -net } \
+    flags { -subdivide_step } ;# checker off
+
+  set net ""
+  if { [info exists keys(-net)] } {
+    set net $keys(-net)
   }
+
+  set subdivide_step [info exists flags(-subdivide_step)]
+
+  rsz::set_debug_cmd $net $subdivide_step
 }
-  
-proc parse_slack_margin_arg { keys_var } {
-  upvar 1 $keys_var keys
-  set slack_margin 0.0
-  if { [info exists keys(-slack_margin)] } {
-    set slack_margin $keys(-slack_margin)
-    sta::check_positive_float "-slack_margin" $slack_margin
-    set slack_margin [sta::time_ui_sta $slack_margin]
+
+proc report_swappable_pins { } {
+  report_swappable_pins_cmd
+}
+
+proc parse_time_margin_arg { key keys_var } {
+  return [sta::time_ui_sta [parse_margin_arg $key $keys_var]]
+}
+
+proc parse_percent_margin_arg { key keys_var } {
+  set margin [parse_margin_arg $key $keys_var]
+  if { !($margin >= 0 && $margin < 100) } {
+    utl::warn RSZ 67 "$key must be  between 0 and 100 percent."
   }
-  return $slack_margin
+  return $margin
 }
-  
+
+proc parse_margin_arg { key keys_var } {
+  upvar 2 $keys_var keys
+
+  set margin 0.0
+  if { [info exists keys($key)] } {
+    set margin $keys($key)
+    sta::check_float $key $margin
+  }
+  return $margin
+}
+
 proc parse_max_util { keys_var } {
   upvar 1 $keys_var keys
   set max_util 0.0
   if { [info exists keys(-max_utilization)] } {
     set max_util $keys(-max_utilization)
-    if {!([string is double $max_util] && $max_util >= 0.0 && $max_util <= 100)} {
+    if { !([string is double $max_util] && $max_util >= 0.0 && $max_util <= 100) } {
       utl::error RSZ 4 "-max_utilization must be between 0 and 100%."
     }
     set max_util [expr $max_util / 100.0]
   }
   return $max_util
 }
-  
+
 proc parse_max_wire_length { keys_var } {
   upvar 1 $keys_var keys
   set max_wire_length 0
@@ -525,57 +1371,24 @@ proc parse_max_wire_length { keys_var } {
   }
   return $max_wire_length
 }
-  
-proc check_max_wire_length { max_wire_length } {
-  if { [rsz::wire_signal_resistance [sta::cmd_corner]] > 0 } {
-    # Must follow rsz::resizer_preamble so buffers are known.
+
+proc check_max_wire_length { max_wire_length use_default } {
+  if { [est::wire_signal_resistance [sta::cmd_scene]] > 0 } {
     set min_delay_max_wire_length [rsz::find_max_wire_length]
     if { $max_wire_length > 0 } {
       if { $max_wire_length < $min_delay_max_wire_length } {
-        utl::warn RSZ 17 "max wire length less than [format %.0fu [sta::distance_sta_ui $min_delay_max_wire_length]] increases wire delays."
+        set wire_length_fmt [format %.0fu [sta::distance_sta_ui $min_delay_max_wire_length]]
+        utl::warn RSZ 65 "max wire length less than $wire_length_fmt increases wire delays."
       }
     } else {
-      set max_wire_length $min_delay_max_wire_length
-      utl::info RSZ 58 "Using max wire length [format %.0f [sta::distance_sta_ui $max_wire_length]]um."
+      if { $use_default } {
+        set max_wire_length $min_delay_max_wire_length
+        set max_wire_length_fmt [format %.0f [sta::distance_sta_ui $max_wire_length]]
+        utl::info RSZ 58 "Using max wire length ${max_wire_length_fmt}um."
+      }
     }
   }
   return $max_wire_length
-}
-
-proc dblayer_wire_rc { layer } {
-  set layer_width_dbu [$layer getWidth]
-  set layer_width_micron [ord::dbu_to_microns $layer_width_dbu]
-  set res_ohm_per_sq [$layer getResistance]
-  set res_ohm_per_micron [expr $res_ohm_per_sq / $layer_width_micron]
-  set cap_area_pf_per_sq_micron [$layer getCapacitance]
-  set cap_edge_pf_per_micron [$layer getEdgeCapacitance]
-  set cap_pf_per_micron [expr 1 * $layer_width_micron * $cap_area_pf_per_sq_micron \
-                           + $cap_edge_pf_per_micron * 2]
-  # ohms/meter
-  set wire_res [expr $res_ohm_per_micron * 1e+6]
-  # farads/meter
-  set wire_cap [expr $cap_pf_per_micron * 1e-12 * 1e+6]
-  return [list $wire_res $wire_cap]
-}
-
-# Set DB layer RC
-proc set_dblayer_wire_rc { layer res cap } {
-  # Zero the edge cap and just use the user given value
-  $layer setEdgeCapacitance 0
-  # Convert wire capacitance/wire_length to capacitance/area.
-  set wire_width [ord::dbu_to_microns [$layer getWidth]]
-  # Convert to pF/um.
-  set cap_per_square [expr $cap * 1e+6 / $wire_width]
-  $layer setCapacitance $cap_per_square
-  
-  # Convert resistance/wire_length to resistance/square.
-  # convert to ohms/square
-  set res_per_square [expr $wire_width * 1e-6 * $res]
-  $layer setResistance $res_per_square
-}
-
-proc set_dbvia_wire_r { layer res } {
-  $layer setResistance $res
 }
 
 # namespace

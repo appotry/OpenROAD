@@ -1,236 +1,229 @@
-/////////////////////////////////////////////////////////////////////////////
-//
-// Copyright (c) 2019, OpenROAD
-// All rights reserved.
-//
-// BSD 3-Clause License
-//
-// Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions are met:
-//
-// * Redistributions of source code must retain the above copyright notice, this
-//   list of conditions and the following disclaimer.
-//
-// * Redistributions in binary form must reproduce the above copyright notice,
-//   this list of conditions and the following disclaimer in the documentation
-//   and/or other materials provided with the distribution.
-//
-// * Neither the name of the copyright holder nor the names of its
-//   contributors may be used to endorse or promote products derived from
-//   this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
-// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-// POSSIBILITY OF SUCH DAMAGE.
-///////////////////////////////////////////////////////////////////////////////
-
-#include "dpl/Opendp.h"
+// SPDX-License-Identifier: BSD-3-Clause
+// Copyright (c) 2019-2025, The OpenROAD Authors
 
 #include <algorithm>
 #include <cfloat>
 #include <limits>
+#include <map>
+#include <memory>
+#include <optional>
+#include <string>
+#include <unordered_set>
+#include <utility>
+#include <vector>
 
+#include "PlacementDRC.h"
+#include "boost/polygon/polygon.hpp"
+#include "dpl/Opendp.h"
+#include "infrastructure/Grid.h"
+#include "infrastructure/Objects.h"
+#include "infrastructure/architecture.h"
+#include "infrastructure/network.h"
+#include "odb/db.h"
+#include "odb/dbTypes.h"
+#include "odb/geom.h"
+#include "odb/util.h"
+#include "util/symmetry.h"
 #include "utl/Logger.h"
-#include "ord/OpenRoad.hh"
 
 namespace dpl {
 
-using std::max;
-using std::min;
-using std::numeric_limits;
 using std::string;
 using std::vector;
 
-using utl::DPL;
-
 using odb::dbBox;
 using odb::dbMaster;
-using odb::dbMPin;
-using odb::dbMTerm;
-using odb::dbNet;
 using odb::dbOrientType;
 using odb::dbRegion;
-using odb::dbSBox;
-using odb::dbSigType;
-using odb::dbSWire;
 using odb::Rect;
 
-static bool
-swapWidthHeight(dbOrientType orient);
+namespace {
 
-void
-Opendp::importDb()
+using Polygon90 = boost::polygon::polygon_90_with_holes_data<int>;
+using Polygon90Set = boost::polygon::polygon_90_set_data<int>;
+using BoostRect = boost::polygon::rectangle_data<int>;
+
+// Build a polygon set representing the outer boundary of the row area
+// with interior holes (macro cutouts) filled in.
+Polygon90Set buildRowOuterShell(odb::dbBlock* block)
+{
+  using boost::polygon::operators::operator+=;
+  using boost::polygon::operators::operator-=;
+
+  Polygon90Set row_area;
+  for (odb::dbRow* row : block->getRows()) {
+    if (row->getSite()->getClass() == odb::dbSiteClass::PAD) {
+      continue;
+    }
+    const Rect row_rect = row->getBBox();
+    row_area += BoostRect{
+        row_rect.xMin(), row_rect.yMin(), row_rect.xMax(), row_rect.yMax()};
+  }
+
+  // Identify interior holes by computing voids within the bounding box.
+  // Voids whose extent doesn't touch the bbox edge are interior holes
+  // that should be filled (e.g. macro cutouts surrounded by rows).
+  BoostRect bbox;
+  boost::polygon::extents(bbox, row_area);
+
+  Polygon90Set voids;
+  voids += bbox;
+  voids -= row_area;
+
+  std::vector<Polygon90> void_polygons;
+  voids.get_polygons(void_polygons);
+
+  for (const Polygon90& void_poly : void_polygons) {
+    BoostRect void_ext;
+    boost::polygon::extents(void_ext, void_poly);
+    const bool touches_boundary
+        = boost::polygon::xl(void_ext) <= boost::polygon::xl(bbox)
+          || boost::polygon::xh(void_ext) >= boost::polygon::xh(bbox)
+          || boost::polygon::yl(void_ext) <= boost::polygon::yl(bbox)
+          || boost::polygon::yh(void_ext) >= boost::polygon::yh(bbox);
+    if (!touches_boundary) {
+      row_area += void_poly;
+    }
+  }
+
+  return row_area;
+}
+
+std::vector<Rect> getOuterShellRects(const Polygon90Set& outer_shell)
+{
+  std::vector<BoostRect> shell_rects;
+  outer_shell.get_rectangles(shell_rects);
+
+  std::vector<Rect> rects;
+  rects.reserve(shell_rects.size());
+  for (const BoostRect& rect : shell_rects) {
+    rects.emplace_back(boost::polygon::xl(rect),
+                       boost::polygon::yl(rect),
+                       boost::polygon::xh(rect),
+                       boost::polygon::yh(rect));
+  }
+  return rects;
+}
+
+bool bboxIntersectsOuterShell(const Rect& bbox,
+                              const std::vector<Rect>& outer_shell_rects)
+{
+  return std::ranges::any_of(outer_shell_rects, [&](const Rect& shell_rect) {
+    return bbox.intersects(shell_rect);
+  });
+}
+
+// Look at single-row CORE masters and return a canonical R0-row (topPwr,
+// botPwr). Requires top != bot so the convention is unambiguous;
+// symmetric-power cells cannot anchor the convention.  Returns (UNK, UNK) if
+// none found.
+std::pair<int, int> inferR0RowPower(const Network* network,
+                                    const Grid* grid,
+                                    odb::dbBlock* block)
+{
+  for (odb::dbInst* inst : block->getInsts()) {
+    odb::dbMaster* db_master = inst->getMaster();
+    if (db_master->getType() != odb::dbMasterType::CORE) {
+      continue;
+    }
+    if (grid->isMultiHeight(db_master)) {
+      continue;
+    }
+    const Master* dpl_master
+        = const_cast<Network*>(network)->getMaster(db_master);
+    if (dpl_master == nullptr) {
+      continue;
+    }
+    const int bot = dpl_master->getBottomPowerType();
+    const int top = dpl_master->getTopPowerType();
+    if (bot != Architecture::Row::Power_UNK
+        && top != Architecture::Row::Power_UNK && bot != top) {
+      return {top, bot};
+    }
+  }
+  return {Architecture::Row::Power_UNK, Architecture::Row::Power_UNK};
+}
+
+// Whether the orientation flips the master's Y axis (swapping top and bottom
+// power rails).  Only the axis-aligned orientations are expected for standard
+// cell rows; rotations return nullopt so row power stays unknown.
+std::optional<bool> orientFlipsY(const odb::dbOrientType& orient)
+{
+  using odb::dbOrientType;
+  switch (orient.getValue()) {
+    case dbOrientType::MX:
+    case dbOrientType::R180:
+      return true;
+    case dbOrientType::R0:
+    case dbOrientType::MY:
+      return false;
+    case dbOrientType::R90:
+    case dbOrientType::R270:
+    case dbOrientType::MXR90:
+    case dbOrientType::MYR90:
+      return std::nullopt;
+  }
+  return std::nullopt;
+}
+
+}  // namespace
+
+void Opendp::importDb(const bool fixed_only)
 {
   block_ = db_->getChip()->getBlock();
-  core_ = ord::getCore(block_);
-
+  core_ = block_->getCoreArea();
+  grid_->setCore(core_);
+  have_fillers_ = false;
+  disallow_one_site_gaps_ = !odb::hasOneSiteMaster(db_);
+  debugPrint(logger_,
+             utl::DPL,
+             "one_site_gap",
+             1,
+             "one_site_gaps disallowed: {}",
+             disallow_one_site_gaps_ ? "true" : "false");
   importClear();
-  examineRows();
-  makeMacros();
-  makeCells();
-  makeGroups();
-  findRowPower();
+  grid_->examineRows(block_);
+  initPlacementDRC();
+  createNetwork(fixed_only);
+  createArchitecture();
+  setUpPlacementGroups();
 
-  Power row_power = (initial_power_ == undefined) ? macro_top_power_ : initial_power_;
-  row0_top_power_is_vdd_ = (row_power == VDD);
-}
-
-void
-Opendp::importClear()
-{
-  db_master_map_.clear();
-  cells_.clear();
-  groups_.clear();
-  db_master_map_.clear();
-  db_inst_map_.clear();
-  deleteGrid();
-  have_multi_row_cells_ = false;
-}
-
-void
-Opendp::makeMacros()
-{
-  macro_top_power_ = undefined;
-  vector<dbMaster *> masters;
-  block_->getMasters(masters);
-  for (auto master : masters) {
-    struct Macro &macro = db_master_map_[master];
-    defineTopPower(&macro, master);
-  }
-}
-
-void
-Opendp::defineTopPower(Macro *macro, dbMaster *master)
-{
-  dbMTerm *power = nullptr;
-  dbMTerm *gnd = nullptr;
-  for (dbMTerm *mterm : master->getMTerms()) {
-    dbSigType sig_type = mterm->getSigType();
-    if (sig_type == dbSigType::POWER) {
-      power = mterm;
-    }
-    else if (sig_type == dbSigType::GROUND) {
-      gnd = mterm;
-    }
-  }
-
-  if (power && gnd) {
-    int master_height = master->getHeight();
-    bool is_multi_row = master_height != row_height_
-                        && master_height % row_height_ == 0;
-
-    macro->is_multi_row_ = is_multi_row;
-
-    int power_y_max = find_ymax(power);
-    int gnd_y_max = find_ymax(gnd);
-    Power top_power = (power_y_max > gnd_y_max) ? VDD : VSS;
-    macro->top_power_ = top_power;
-    if (!is_multi_row) {
-      macro_top_power_ = top_power;
-    }
-  }
-}
-
-int
-Opendp::find_ymax(dbMTerm *mterm) const
-{
-  int ymax = 0;
-  for (dbMPin *mpin : mterm->getMPins()) {
-    for (dbBox *box : mpin->getGeometry()) {
-      ymax = max(ymax, box->yMax());
-    }
-  }
-  return ymax;
-}
-
-void
-Opendp::examineRows()
-{
-  auto rows = block_->getRows();
-  if (!rows.empty()) {
-    int bottom_row_y = numeric_limits<int>::max();
-    dbRow *bottom_row = nullptr;
-    for (dbRow *db_row : rows) {
-      dbSite *site = db_row->getSite();
-      row_height_ = site->getHeight();
-      site_width_ = site->getWidth();
-
-      int row_x, row_y;
-      db_row->getOrigin(row_x, row_y);
-      if (row_y < bottom_row_y) {
-        bottom_row_y = row_y;
-        bottom_row = db_row;
+  if (logger_->debugCheck(utl::DPL, "hybrid", 1)) {
+    std::map<int, int> height_counts;
+    for (const auto& node : network_->getNodes()) {
+      if (node->getType() != Node::CELL) {
+        continue;
       }
+      height_counts[node->getHeight().v]++;
     }
-    row_site_count_ = divFloor(core_.dx(), site_width_);
-    row_count_ = divFloor(core_.dy(), row_height_);
-
-    row0_orient_is_r0_ = (bottom_row->getOrient() == dbOrientType::R0);
-  }
-  else
-    logger_->error(DPL, 12, "no rows found.");
-}
-
-void
-Opendp::makeCells()
-{
-  auto db_insts = block_->getInsts();
-  cells_.reserve(db_insts.size());
-  for (auto db_inst : db_insts) {
-    dbMaster *master = db_inst->getMaster();
-    dbMasterType type = master->getType();
-    if (master->isCoreAutoPlaceable()) {
-      cells_.push_back(Cell());
-      Cell &cell = cells_.back();
-      cell.db_inst_ = db_inst;
-      db_inst_map_[db_inst] = &cell;
-
-      Rect bbox = getBbox(db_inst);
-      cell.width_ = bbox.dx();
-      cell.height_ = bbox.dy();
-      cell.x_ = bbox.xMin();
-      cell.y_ = bbox.yMin();
-      cell.orient_ = db_inst->getOrient();
-      cell.is_placed_ = isFixed(&cell);
-
-      Macro &macro = db_master_map_[master];
-      if (macro.is_multi_row_)
-        have_multi_row_cells_ = true;
+    logger_->report("Cell height distribution ({} unique micron height(s)):",
+                    height_counts.size());
+    for (const auto& [height, count] : height_counts) {
+      logger_->report(
+          "  height {:.3f} um: {} cells", block_->dbuToMicrons(height), count);
     }
   }
 }
 
-Rect
-Opendp::getBbox(dbInst *inst)
+void Opendp::importClear()
 {
-  dbMaster *master = inst->getMaster();
-
-  int loc_x, loc_y;
-  inst->getLocation(loc_x, loc_y);
-  // Shift by core lower left.
-  loc_x -= core_.xMin();
-  loc_y -= core_.yMin();
-
-  int width = master->getWidth();
-  int height = master->getHeight();
-  if (swapWidthHeight(inst->getOrient()))
-    std::swap(width, height);
-  
-  return Rect(loc_x, loc_y, loc_x + width, loc_y + height);
+  deleteGrid();
+  network_->clear();
+  arch_->clear();
 }
 
-static bool
-swapWidthHeight(dbOrientType orient)
+void Opendp::initPlacementDRC()
 {
-  switch (orient) {
+  drc_engine_ = std::make_unique<PlacementDRC>(logger_,
+                                               grid_.get(),
+                                               db_->getTech(),
+                                               padding_.get(),
+                                               !odb::hasOneSiteMaster(db_));
+}
+
+static bool swapWidthHeight(const dbOrientType& orient)
+{
+  switch (orient.getValue()) {
     case dbOrientType::R90:
     case dbOrientType::MXR90:
     case dbOrientType::R270:
@@ -246,76 +239,325 @@ swapWidthHeight(dbOrientType orient)
   return false;
 }
 
-// OpenDB represents groups as regions with the parent pointing to
-// the region.
-// DEF GROUP => dbRegion with instances, no boundary, parent->region
-// DEF REGION => dbRegion no instances, boundary, parent = null
-void
-Opendp::makeGroups()
+Rect Opendp::getBbox(odb::dbInst* inst)
 {
-  // preallocate groups so it does not grow when push_back is called
-  // because region cells point to them.
-  auto db_regions = block_->getRegions();
-  groups_.reserve(block_->getRegions().size());
-  for (auto db_region : db_regions) {
-    dbRegion *parent = db_region->getParent();
-    if (parent) {
-      groups_.emplace_back(Group());
-      struct Group &group = groups_.back();
-      string group_name = db_region->getName();
-      group.name = group_name;
-      group.boundary.mergeInit();
-      auto boundaries = db_region->getParent()->getBoundaries();
-      for (dbBox *boundary : boundaries) {
-        Rect box;
-        boundary->getBox(box);
-        box = box.intersect(core_);
-        // offset region to core origin
-        box.moveDelta(-core_.xMin(), -core_.yMin());
+  dbMaster* master = inst->getMaster();
 
-        group.regions.push_back(box);
-        group.boundary.merge(box);
+  int loc_x, loc_y;
+  inst->getLocation(loc_x, loc_y);
+  // Shift by core lower left.
+  loc_x -= core_.xMin();
+  loc_y -= core_.yMin();
+
+  int width = master->getWidth();
+  int height = master->getHeight();
+  if (swapWidthHeight(inst->getOrient())) {
+    std::swap(width, height);
+  }
+
+  return Rect(loc_x, loc_y, loc_x + width, loc_y + height);
+}
+void Opendp::createNetwork(const bool fixed_only)
+{
+  odb::dbBlock* block = db_->getChip()->getBlock();
+  network_->setCore(core_);
+  const auto row_outer_shell_rects
+      = getOuterShellRects(buildRowOuterShell(block));
+  ///////////////////////////////////
+  auto min_row_height = std::numeric_limits<int>::max();
+  for (odb::dbRow* row : db_->getChip()->getBlock()->getRows()) {
+    min_row_height = std::min(min_row_height, row->getSite()->getHeight());
+  }
+  ///////////////////////////////////
+  using odb::dbInst;
+  auto block_insts = block->getInsts();
+  std::vector<dbInst*> insts(block_insts.begin(), block_insts.end());
+  std::ranges::stable_sort(
+      insts, [](dbInst* a, dbInst* b) { return a->getName() < b->getName(); });
+
+  for (dbInst* inst : insts) {
+    // Skip instances which are not placeable.
+    if (!inst->getMaster()->isCoreAutoPlaceable()) {
+      debugPrint(logger_,
+                 utl::DPL,
+                 "cell_init",
+                 2,
+                 "Skipping instance {} with master {} of type {} (not core "
+                 "auto placeable)",
+                 inst->getName(),
+                 inst->getMaster()->getName(),
+                 inst->getMaster()->getType().getString());
+      continue;
+    }
+    if (inst->isFixed()
+        && !bboxIntersectsOuterShell(inst->getBBox()->getBox(),
+                                     row_outer_shell_rects)) {
+      debugPrint(logger_,
+                 utl::DPL,
+                 "cell_init",
+                 2,
+                 "Skipping fixed instance {} with master {} of type {} "
+                 "(outside outer shell)",
+                 inst->getName(),
+                 inst->getMaster()->getName(),
+                 inst->getMaster()->getType().getString());
+      continue;
+    }
+    network_->addMaster(inst->getMaster(), grid_.get(), drc_engine_.get());
+    // Fixed-only mode keeps fixed instances and macros; a placed but unfixed
+    // macro is forced fixed below and must still be checked.  The master of
+    // a skipped movable cell is still registered so that row power inference
+    // sees the CORE masters.
+    if (fixed_only && !inst->isFixed() && !inst->isBlock()) {
+      continue;
+    }
+    network_->addNode(inst);
+    // A placed-but-not-fixed macro must be treated as an obstacle, not a
+    // movable cell.  Force it fixed here so both detailed_placement and
+    // improve_placement see it as a blockage instead of trying to legalize it.
+    Node* node = network_->getNode(inst);
+    if (node->isBlock() && !node->isFixed()) {
+      if (!inst->isPlaced()) {
+        logger_->error(utl::DPL,
+                       405,
+                       "Macro {} is neither placed nor fixed. Place and fix "
+                       "macros before detailed placement.",
+                       inst->getName());
+      }
+      logger_->warn(
+          utl::DPL,
+          404,
+          "Macro {} is placed but not fixed; treating it as fixed during "
+          "legalization. Mark it FIXED to silence this warning.",
+          inst->getName());
+      node->setFixed(true);
+    }
+    if (isFiller(inst)) {
+      have_fillers_ = true;
+    }
+  }
+  // Connectivity is not needed to check fixed instances.  Skipping it also
+  // avoids warnings about IO pins that are not placed yet at floorplan.
+  if (!fixed_only) {
+    for (odb::dbBTerm* bterm : block->getBTerms()) {
+      // Skip supply nets.
+      odb::dbNet* net = bterm->getNet();
+      if (!net || net->getSigType().isSupply()) {
+        continue;
+      }
+      if (!bterm->getFirstPinPlacementStatus().isPlaced()) {
+        logger_->warn(utl::DPL, 387, "BTerm {} is unplaced.", bterm->getName());
+        // skip unplaced terminals
+        continue;
+      }
+      if (bterm->getBBox().isInverted()) {
+        logger_->error(
+            utl::DPL, 386, "BTerm {} has no shapes.", bterm->getName());
       }
 
-      for (auto db_inst : db_region->getRegionInsts()) {
-        Cell *cell = db_inst_map_[db_inst];
-        group.cells_.push_back(cell);
-        cell->group_ = &group;
+      network_->addNode(bterm);
+    }
+
+    auto nets = block->getNets();
+    for (odb::dbNet* net : nets) {
+      // Skip supply nets.
+      if (net->getSigType().isSupply()) {
+        continue;
       }
+      network_->addEdge(net);
+    }
+  }
+
+  for (odb::dbBlockage* blockage : block->getBlockages()) {
+    if (!blockage->isSoft()) {
+      auto box = blockage->getBBox()->getBox();
+      box.moveDelta(-core_.xMin(), -core_.yMin());
+      network_->createAndAddBlockage(box);
     }
   }
 }
-
-void
-Opendp::findRowPower()
+////////////////////////////////////////////////////////////////
+void Opendp::createArchitecture()
 {
-  initial_power_ = Power::undefined;
-  int min_vdd_y = numeric_limits<int>::max();
-  bool found_vdd = false;
-  for (dbNet *net : block_->getNets()) {
-    if (net->isSpecial()
-        && net->getSigType() == dbSigType::POWER) {
-      for (dbSWire *swire : net->getSWires()) {
-        for (dbSBox *sbox : swire->getWires()) {
-          min_vdd_y = min(min_vdd_y, sbox->yMin());
-          found_vdd = true;
+  odb::dbBlock* block = db_->getChip()->getBlock();
+
+  auto min_row_height = std::numeric_limits<int>::max();
+  for (odb::dbRow* row : block->getRows()) {
+    min_row_height = std::min(min_row_height, row->getSite()->getHeight());
+  }
+
+  std::map<int, std::unordered_set<std::string>> skip_list;
+
+  for (odb::dbRow* row : block->getRows()) {
+    if (row->getSite()->getClass() == odb::dbSiteClass::PAD) {
+      continue;
+    }
+    if (row->getDirection() != odb::dbRowDir::HORIZONTAL) {
+      // error.
+      continue;
+    }
+    odb::dbSite* site = row->getSite();
+    if (grid_->hasHybridRows() && site->hasRowPattern()) {
+      skip_list[site->getHeight()].insert(site->getName());
+      continue;
+    }
+
+    if (!grid_->hasHybridRows() && site->getHeight() > min_row_height) {
+      skip_list[site->getHeight()].insert(site->getName());
+      continue;
+    }
+    odb::Point origin = row->getOrigin();
+
+    Architecture::Row* archRow = arch_->createAndAddRow();
+
+    archRow->setSubRowOrigin(DbuX{origin.x() - core_.xMin()});
+    archRow->setBottom(DbuY{origin.y() - core_.yMin()});
+    archRow->setSiteSpacing(DbuX{row->getSpacing()});
+    archRow->setNumSites(row->getSiteCount());
+    archRow->setSiteWidth(DbuX{site->getWidth()});
+    archRow->setHeight(DbuY{site->getHeight()});
+
+    // Start with UNK; resolved after all rows are created using an inferred
+    // R0 row convention.
+    archRow->setBottomPower(Architecture::Row::Power_UNK);
+    archRow->setTopPower(Architecture::Row::Power_UNK);
+
+    // Symmetry.  From the site.
+    unsigned symmetry = 0x00000000;
+    if (site->getSymmetryX()) {
+      symmetry |= Symmetry_X;
+    }
+    if (site->getSymmetryY()) {
+      symmetry |= Symmetry_Y;
+    }
+    if (site->getSymmetryR90()) {
+      symmetry |= Symmetry_ROT90;
+    }
+    archRow->setSymmetry(symmetry);
+
+    // Orientation.  From the row.
+    archRow->setOrient(row->getOrient());
+  }
+  // Get surrounding box.
+  {
+    DbuX xmin = std::numeric_limits<DbuX>::max();
+    DbuX xmax = std::numeric_limits<DbuX>::lowest();
+    DbuY ymin = std::numeric_limits<DbuY>::max();
+    DbuY ymax = std::numeric_limits<DbuY>::lowest();
+    for (int r = 0; r < arch_->getNumRows(); r++) {
+      Architecture::Row* row = arch_->getRow(r);
+
+      xmin = std::min(xmin, row->getLeft());
+      xmax = std::max(xmax, row->getRight());
+      ymin = std::min(ymin, row->getBottom());
+      ymax = std::max(ymax, row->getTop());
+    }
+    arch_->setMinX(xmin);
+    arch_->setMaxX(xmax);
+    arch_->setMinY(ymin);
+    arch_->setMaxY(ymax);
+  }
+
+  for (int r = 0; r < arch_->getNumRows(); r++) {
+    int numSites = arch_->getRow(r)->getNumSites();
+    DbuX originX = arch_->getRow(r)->getLeft();
+    DbuX siteSpacing = arch_->getRow(r)->getSiteSpacing();
+    DbuX siteWidth = arch_->getRow(r)->getSiteWidth();
+    const DbuX endGap = siteWidth - siteSpacing;
+    if (originX < arch_->getMinX()) {
+      originX = arch_->getMinX();
+      if (arch_->getRow(r)->getLeft() != originX) {
+        arch_->getRow(r)->setSubRowOrigin(originX);
+      }
+    }
+    if (originX + numSites * siteSpacing + endGap > arch_->getMaxX()) {
+      numSites = ((arch_->getMaxX() - endGap - originX) / siteSpacing).v;
+      if (arch_->getRow(r)->getNumSites() != numSites) {
+        arch_->getRow(r)->setNumSites(numSites);
+      }
+    }
+  }
+  // PADDING
+  arch_->setUsePadding(padding_ != nullptr);
+  arch_->setPadding(padding_.get());
+  arch_->setSiteWidth(grid_->getSiteWidth());
+
+  // Populate each row's top/bottom power rail from an inferred R0 convention.
+  // Without this, row power stays Power_UNK and Architecture::powerCompatible
+  // degenerates to "always true", letting multi-row cells land on wrong-parity
+  // rows (VDD pin on VSS stripe, etc.).
+  const auto [ref_r0_top, ref_r0_bot]
+      = inferR0RowPower(network_.get(), grid_.get(), block);
+  if (ref_r0_bot != Architecture::Row::Power_UNK) {
+    for (int r = 0; r < arch_->getNumRows(); r++) {
+      Architecture::Row* archRow = arch_->getRow(r);
+      const auto flipped = orientFlipsY(archRow->getOrient());
+      if (!flipped.has_value()) {
+        continue;  // Rotation — leave as UNK.
+      }
+      if (*flipped) {
+        archRow->setBottomPower(ref_r0_top);
+        archRow->setTopPower(ref_r0_bot);
+      } else {
+        archRow->setBottomPower(ref_r0_bot);
+        archRow->setTopPower(ref_r0_top);
+      }
+    }
+  }
+
+  arch_->postProcess(network_.get());
+}
+
+void Opendp::setUpPlacementGroups()
+{
+  regions_rtree_.clear();
+  odb::dbBlock* block = db_->getChip()->getBlock();
+  int count = 0;
+  auto db_groups = block->getGroups();
+  for (auto db_group : db_groups) {
+    dbRegion* region = db_group->getRegion();
+    if (region) {
+      Group* rptr = arch_->createAndAddRegion();
+      rptr->setId(count++);
+      Rect bbox;
+      bbox.mergeInit();
+      for (dbBox* boundary : region->getBoundaries()) {
+        Rect box = boundary->getBox();
+        box = box.intersect(core_);
+        box.moveDelta(-core_.xMin(), -core_.yMin());
+
+        bgBox bgbox(
+            bgPoint(box.xMin(), box.yMin()),
+            bgPoint(
+                box.xMax() - 1,
+                box.yMax() - 1));  /// the -1 is to prevent imaginary overlaps
+                                   /// where a region ends and another starts
+        regions_rtree_.insert(bgbox);
+        rptr->addRect(box);
+        bbox.merge(box);
+      }
+      rptr->setBoundary(bbox);
+
+      // The instances within this region.
+      for (auto db_inst : db_group->getInsts()) {
+        Node* nd = network_->getNode(db_inst);
+        if (nd != nullptr) {
+          nd->setGroupId(rptr->getId());
+          nd->setGroup(rptr);
+          rptr->addCell(nd);
         }
       }
     }
   }
-  if (found_vdd) {
-    initial_power_ = divRound(min_vdd_y, row_height_) % 2 == 0 ? VDD : VSS;
-  }
 }
-
-void
-Opendp::reportImportWarnings()
+void Opendp::adjustNodesOrient()
 {
-  if (macro_top_power_ == Power::undefined) {
-    logger_->warn(DPL, 10, "Cannot find MACRO with VDD/VSS pins.");
+  for (auto& node : network_->getNodes()) {
+    if (node->getType() != Node::CELL) {
+      continue;
+    }
+    auto inst = node->getDbInst();
+    node->adjustCurrOrient(inst->getOrient());
   }
-  if (initial_power_ == Power::undefined)
-    logger_->warn(DPL, 11, "Could not find power special net.");
 }
-
-}  // namespace
+}  // namespace dpl

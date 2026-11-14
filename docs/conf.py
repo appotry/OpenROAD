@@ -10,18 +10,14 @@
 # add these directories to sys.path here. If the directory is relative to the
 # documentation root, use os.path.abspath to make it absolute, like shown here.
 #
-import docutils
 import os
-import re
-# import sys
-# sys.path.insert(0, os.path.abspath('.'))
-
+import subprocess
 
 # -- Project information -----------------------------------------------------
 
-project = 'OpenROAD'
-copyright = 'The OpenROAD Project, 2020'
-author = 'OpenROAD Team'
+project = "OpenROAD"
+copyright = "The OpenROAD Authors, 2021"
+author = "OpenROAD Team"
 
 
 # -- General configuration ---------------------------------------------------
@@ -30,94 +26,166 @@ author = 'OpenROAD Team'
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
 # ones.
 extensions = [
-    'sphinx.ext.autodoc',
-    'sphinx.ext.ifconfig',
-    'sphinx.ext.mathjax',
-    'sphinx.ext.napoleon',
-    'sphinx.ext.todo',
+    "sphinx.ext.autodoc",
+    "sphinx.ext.ifconfig",
+    "sphinx.ext.mathjax",
+    "sphinx.ext.napoleon",
+    "sphinx.ext.todo",
+    "sphinx_external_toc",
+    "sphinx_copybutton",
+    "myst_parser",
+    "sphinxcontrib.mermaid",
+    "sphinx_tabs.tabs",
+    "sphinx_llm.txt",
 ]
 
+myst_enable_extensions = [
+    "amsmath",
+    "colon_fence",
+    "deflist",
+    "dollarmath",
+    "html_admonition",
+    "html_image",
+    "replacements",
+    "smartquotes",
+    "substitution",
+    "tasklist",
+    "html_image",
+]
+
+external_toc_path = "toc.yml"
+
 # Add any paths that contain templates here, relative to this directory.
-templates_path = ['_templates']
+templates_path = ["_templates"]
 
 # The suffix(es) of source filenames.
 # You can specify multiple suffix as a list of string:
 #
-# source_suffix = ['.rst', '.md']
-source_suffix = '.rst'
+source_suffix = [".rst", ".md"]
 
 # The master toctree document.
-master_doc = 'index'
-
+master_doc = "index"
 
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
 # This pattern also affects html_static_path and html_extra_path.
-exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
+exclude_patterns = [
+    "_build",
+    "Thumbs.db",
+    ".DS_Store",
+    "**/LICENSE",
+    "**/LICENSE.md",
+    "README.md",
+    "main/src/odb/src/def/README.md",
+    "main/src/odb/src/def/doc/README.md",
+    "main/src/odb/src/lef/README.md",
+    # Load-bearing: `setup()` symlinks `docs/main` -> the repo root, so
+    # `docs/main/docs` *is* this directory. Without this entry Sphinx
+    # discovers every page twice. Do not remove.
+    "main/docs",
+    "md",  # manpage dir
+    "man",  # manpage dir
+    "cat",  # manpage dir
+    "html",  # manpage dir
+]
 
 # The name of the Pygments (syntax highlighting) style to use.
 pygments_style = None
 
+# Mermaid related args
+mermaid_output_format = "svg"
+mermaid_params = [
+    "-p",
+    "puppeteer-config.json",
+    "--theme",
+    "forest",
+    "--width",
+    "200",
+    "--backgroundColor",
+    "transparent",
+]
+mermaid_init_js = (
+    "mermaid.initialize({startOnLoad:true, flowchart:{useMaxWidth:false}})"
+)
+mermaid_verbose = True
 
 # -- Options for HTML output -------------------------------------------------
 
 # The theme to use for HTML and HTML Help pages.  See the documentation for
 # a list of builtin themes.
 #
-html_theme = "sphinx_symbiflow_theme"
+html_theme = "sphinx_book_theme"
 
 html_theme_options = {
-    # Specify a list of menu in Header.
-    # Tuples forms:
-    #  ('Name', 'external url or path of pages in the document', boolean, 'icon name')
-    #
-    # Third argument:
-    # True indicates an external link.
-    # False indicates path of pages in the document.
-    #
-    # Fourth argument:
-    # Specify the icon name.
-    # For details see link.
-    # https://material.io/icons/
-    'header_links' : [
-       ('Home', 'index', False, 'home'),
-       ("The OpenROAD Project", "https://theopenroadproject.org", True, 'launch'),
-       ("GitHub", "https://github.com/The-OpenROAD-Project/OpenROAD", True, 'link')
+    "repository_url": "https://github.com/The-OpenROAD-Project/OpenROAD",
+    "repository_branch": "master",
+    "show_navbar_depth": 2,
+    "use_issues_button": True,
+    # "use_repository_button": True,
+    "use_download_button": True,
+    # list for more fine-grained ordering of icons
+    "icon_links": [
+        {
+            "name": "The OpenROAD Project",
+            "url": "https://theopenroadproject.org/",
+            "icon": "fa-solid fa-globe",
+        },
+        {
+            "name": "Twitter",
+            "url": "https://twitter.com/OpenROAD_EDA",
+            "icon": "fa-brands fa-twitter",
+        },
+        {
+            "name": "Email",
+            "url": "mailto:openroad@ucsd.edu",
+            "icon": "fa-solid fa-envelope",
+        },
+        {
+            "name": "GitHub",
+            "url": "https://github.com/The-OpenROAD-Project/OpenROAD",
+            "icon": "fa-brands fa-github",
+        },
+        {
+            "name": "Stars",
+            "url": "https://github.com/The-OpenROAD-Project/OpenROAD/stargazers",
+            "icon": "https://img.shields.io/github/stars/The-OpenROAD-Project/OpenROAD",
+            "type": "url",
+        },
     ],
-
-    # Customize css colors.
-    # For details see link.
-    # https://getmdl.io/customize/index.html
-    #
-    # Values: amber, blue, brown, cyan deep_orange, deep_purple, green, grey, indigo, light_blue,
-    #         light_green, lime, orange, pink, purple, red, teal, yellow(Default: indigo)
-    'primary_color': 'indigo',
-    # Values: Same as primary_color. (Default: pink)
-    'accent_color': 'blue',
-
-    # Customize layout.
-    # For details see link.
-    # https://getmdl.io/components/index.html#layout-section
-    'fixed_drawer': True,
-    'fixed_header': True,
-    'header_waterfall': True,
-    'header_scroll': False,
-
-    # Render title in header.
-    # Values: True, False (Default: False)
-    'show_header_title': False,
-    # Render title in drawer.
-    # Values: True, False (Default: True)
-    'show_drawer_title': True,
-    # Render footer.
-    # Values: True, False (Default: True)
-    'show_footer': True,
-
-    # Hide the symbiflow links
-    'hide_symbiflow_links': True,
 }
 
-# Add any paths that contain custom static files (such as style sheets) here,
-# relative to this directory. They are copied after the builtin static files,
-# so a file named "default.css" will overwrite the builtin "default.css".
-# html_static_path = ['_static']
+
+def swap_prefix(file, old, new):
+    with open(file, "r", encoding="utf-8") as f:
+        lines = f.read()
+    lines = lines.replace(old, new)
+    with open(file, "wt", encoding="utf-8") as f:
+        f.write(lines)
+
+
+def setup(app):
+    import os
+
+    if not os.path.exists("./main"):
+        os.symlink("..", "./main")
+
+    # also symlink readme
+    import shutil
+
+    if not os.path.exists("./main/README2.md"):
+        shutil.copy("main/README.md", "main/README2.md")
+
+    # these prefix swaps will be reverted and is needed for sphinx compilation.
+    for filename in ["../README.md", "../README2.md"]:
+        swap_prefix(filename, "(docs/", "(../")
+        swap_prefix(filename, "```mermaid", "```{mermaid}\n:align: center\n")
+
+    # for populating OR Messages page. The output of both commands is
+    # discarded rather than decoded, so neither depends on the ambient locale.
+    command = "python getMessages.py"
+    subprocess.run(command, shell=True, stdout=subprocess.DEVNULL)
+
+    if not os.path.exists("../_readthedocs/html/doxygen_output"):
+        os.makedirs("../_readthedocs/html/doxygen_output", exist_ok=True)
+    command = "cd .. ; doxygen"
+    subprocess.run(command, shell=True, stdout=subprocess.DEVNULL)

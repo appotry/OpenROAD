@@ -1,54 +1,36 @@
-/////////////////////////////////////////////////////////////////////////////
-//
-// BSD 3-Clause License
-//
-// Copyright (c) 2019, University of California, San Diego.
-// All rights reserved.
-//
-// Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions are met:
-//
-// * Redistributions of source code must retain the above copyright notice, this
-//   list of conditions and the following disclaimer.
-//
-// * Redistributions in binary form must reproduce the above copyright notice,
-//   this list of conditions and the following disclaimer in the documentation
-//   and/or other materials provided with the distribution.
-//
-// * Neither the name of the copyright holder nor the names of its
-//   contributors may be used to endorse or promote products derived from
-//   this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
-// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-// POSSIBILITY OF SUCH DAMAGE.
-//
-///////////////////////////////////////////////////////////////////////////////
+// SPDX-License-Identifier: BSD-3-Clause
+// Copyright (c) 2019-2025, The OpenROAD Authors
 
 
 %{
 #include "grt/GlobalRouter.h"
+#include "GrouteRenderer.h"
+#include "FastRouteRenderer.h"
+#include "CugrRenderer.h"
 #include "ord/OpenRoad.hh"
 #include "sta/Liberty.hh"
 
 namespace ord {
 // Defined in OpenRoad.i
-grt::GlobalRouter* getFastRoute();
-}  // namespace ord
+grt::GlobalRouter* getGlobalRouter();
+}
 
-using ord::getFastRoute;
+using ord::getGlobalRouter;
 using sta::LibertyPort;
 %}
 
 %include "../../Exception.i"
+
+%ignore grt::GlobalRouter::init;
+%ignore grt::GlobalRouter::initDebugFastRoute;
+%ignore grt::GlobalRouter::getDebugFastRoute;
+%ignore grt::GlobalRouter::initDebugCugr;
+%ignore grt::GlobalRouter::getDebugCugr;
+%ignore grt::GlobalRouter::setRenderer;
+
+%import <stl.i>
+%import <std_vector.i>
+%template(vector_int) std::vector<int>;
 
 %inline %{
 
@@ -57,19 +39,49 @@ namespace grt {
 bool
 have_routes()
 {
-  return getFastRoute()->haveRoutes();
+  return getGlobalRouter()->haveRoutes();
+}
+
+bool
+design_is_placed()
+{
+  return getGlobalRouter()->designIsPlaced();
+}
+
+bool
+have_congested_routes()
+{
+  return getGlobalRouter()->haveCongestedRoutes();
+}
+
+bool
+have_detailed_routes()
+{
+  return getGlobalRouter()->haveDetailedRoutes();
+}
+
+void
+report_congestion()
+{
+  getGlobalRouter()->reportCongestion();
+}
+
+bool
+has_congestion()
+{
+  return getGlobalRouter()->hasCongestion();
 }
 
 void
 set_capacity_adjustment(float adjustment)
 {
-  getFastRoute()->setAdjustment(adjustment);
+  getGlobalRouter()->setAdjustment(adjustment);
 }
 
 void
 add_layer_adjustment(int layer, float reductionPercentage)
 {
-  getFastRoute()->addLayerAdjustment(layer, reductionPercentage);
+  getGlobalRouter()->addLayerAdjustment(layer, reductionPercentage);
 }
 
 void
@@ -80,135 +92,326 @@ add_region_adjustment(int minX,
                            int layer,
                            float reductionPercentage)
 {
-  getFastRoute()->addRegionAdjustment(
+  getGlobalRouter()->addRegionAdjustment(
       minX, minY, maxX, maxY, layer, reductionPercentage);
 }
 
 void
-set_min_layer(int minLayer)
+set_verbose(bool v)
 {
-  getFastRoute()->setMinRoutingLayer(minLayer);
+  getGlobalRouter()->setVerbose(v);
 }
 
 void
-set_max_layer(int maxLayer)
+set_congestion_iterations(int iterations)
 {
-  getFastRoute()->setMaxRoutingLayer(maxLayer);
+  getGlobalRouter()->setCongestionIterations(iterations);
 }
 
 void
-set_alpha(float alpha)
+set_congestion_report_iter_step(int congestion_report_iter_step)
 {
-  getFastRoute()->setAlpha(alpha);
+  getGlobalRouter()->setCongestionReportIterStep(congestion_report_iter_step);
+}
+
+void set_congestion_report_file (const char * file_name)
+{
+  getGlobalRouter()->setCongestionReportFile(file_name);
 }
 
 void
-set_alpha_for_net(char* netName, float alpha)
+set_grid_origin(int x, int y)
 {
-  getFastRoute()->addAlphaForNet(netName, alpha);
+  getGlobalRouter()->setGridOrigin(x, y);
 }
 
 void
-set_verbose(int v)
+set_allow_congestion(bool allowCongestion)
 {
-  getFastRoute()->setVerbose(v);
+  getGlobalRouter()->setAllowCongestion(allowCongestion);
 }
 
 void
-set_overflow_iterations(int iterations)
+set_resistance_aware(bool resistance_aware)
 {
-  getFastRoute()->setOverflowIterations(iterations);
+  getGlobalRouter()->setResistanceAware(resistance_aware);
 }
 
 void
-set_grid_origin(long x, long y)
+set_cugr_via_demand(bool enabled)
 {
-  getFastRoute()->setGridOrigin(x, y);
+  getGlobalRouter()->setCUGRViaDemand(enabled);
 }
 
 void
-set_pdrev_for_high_fanout(int pdRevForHighFanout)
+set_res_aware_nets_percentage(float percentage)
 {
-  getFastRoute()->setPDRevForHighFanout(pdRevForHighFanout);
+  getGlobalRouter()->setResAwareNetsPercentage(percentage);
 }
 
 void
-set_allow_overflow(bool allowOverflow)
+set_snapshot_batched_width(int snapshot_batched_width)
 {
-  getFastRoute()->setAllowOverflow(allowOverflow);
+  getGlobalRouter()->setSnapshotBatchedWidth(snapshot_batched_width);
+}
+
+int
+get_snapshot_batched_width()
+{
+  return getGlobalRouter()->getSnapshotBatchedWidth();
+}
+
+int
+get_snapshot_batch_count()
+{
+  return getGlobalRouter()->getSnapshotBatchCount();
 }
 
 void
-set_layer_pitch(int layer, float pitch)
+set_critical_nets_percentage(float criticalNetsPercentage)
 {
-  getFastRoute()->setLayerPitch(layer, pitch);
-}
-
-void
-set_clock_layer_range(int minLayer, int maxLayer)
-{
-  getFastRoute()->setMinLayerForClock(minLayer);
-  getFastRoute()->setMaxLayerForClock(maxLayer);
+  getGlobalRouter()->setCriticalNetsPercentage(criticalNetsPercentage);
 }
 
 void
 set_macro_extension(int macroExtension)
 {
-  getFastRoute()->setMacroExtension(macroExtension);
+  getGlobalRouter()->setMacroExtension(macroExtension);
+}
+
+void
+set_seed(int seed)
+{
+  getGlobalRouter()->setSeed(seed);
+}
+
+void
+set_capacities_perturbation_percentage(float percentage)
+{
+  getGlobalRouter()->setCapacitiesPerturbationPercentage(percentage);
+}
+
+void
+set_perturbation_amount(int perturbation)
+{
+  getGlobalRouter()->setPerturbationAmount(perturbation);
+}
+
+void
+set_use_cugr(bool use_cugr)
+{
+  getGlobalRouter()->setUseCUGR(use_cugr);
+}
+
+bool
+is_use_cugr()
+{
+  return getGlobalRouter()->isUseCUGR();
+}
+
+void
+set_skip_large_fanout(int skip_large_fanout)
+{
+  getGlobalRouter()->setSkipLargeFanoutNets(skip_large_fanout);
+}
+
+void
+set_infinite_cap(bool infinite_capacity)
+{
+  getGlobalRouter()->setInfiniteCapacity(infinite_capacity);
+}
+
+
+
+void start_incremental()
+{
+  getGlobalRouter()->startIncremental();
+}
+
+void end_incremental()
+{
+  // Save guides by default when ending incremental routing from Tcl interface.
+  getGlobalRouter()->endIncremental(true);
 }
 
 void
 global_route()
 {
-  getFastRoute()->globalRoute();
+  const int num_threads = ord::OpenRoad::openRoad()->getThreadCount();
+  getGlobalRouter()->setNumThreads(num_threads);
+  getGlobalRouter()->globalRoute(true);
+}
+
+std::vector<int>
+route_layer_lengths(odb::dbNet* db_net)
+{
+  return getGlobalRouter()->routeLayerLengths(db_net);
+}
+
+int
+repair_antennas(odb::dbMTerm* diode_mterm, int iterations, float ratio_margin, bool jumper_only, bool diode_only)
+{
+  const int num_threads = ord::OpenRoad::openRoad()->getThreadCount();
+  return getGlobalRouter()->repairAntennas(diode_mterm, iterations, ratio_margin, jumper_only, diode_only, num_threads);
 }
 
 void
-global_route_clocks_separately()
+add_net_to_route(odb::dbNet* net)
 {
-  getFastRoute()->globalRouteClocksSeparately();
+  getGlobalRouter()->addNetToRoute(net);
 }
 
 void
-run()
+highlight_net_route(odb::dbNet *net, bool show_pin_locations)
 {
-  getFastRoute()->run();
+  if (!web::Gui::enabled()) {
+    return;
+  }
+
+  GlobalRouter* router = getGlobalRouter();
+  if (router->getRenderer() == nullptr) {
+    router->setRenderer(std::make_unique<GrouteRenderer>(router, router->db()->getTech()));
+  }
+
+  router->getRenderer()->highlightRoute(net, show_pin_locations);
 }
 
 void
-estimate_rc()
+read_guides(const char* fileName)
 {
-  getFastRoute()->estimateRC();
+  getGlobalRouter()->readGuides(fileName);
+}
+
+void set_global_route_debug_cmd(const odb::dbNet *net,
+                                bool steinerTree,
+                                bool rectilinearSTree,
+                                bool tree2D,
+                                bool tree3D,
+                                bool edges3D)
+{
+  if (!web::Gui::enabled()) {
+    return;
+  }
+
+  GlobalRouter* global_router = getGlobalRouter();
+  if (global_router->getDebugFastRoute() == nullptr) {
+    global_router->initDebugFastRoute(std::make_unique<FastRouteRenderer>(
+      global_router->db()->getTech()));
+  }
+  getGlobalRouter()->setDebugNet(net);
+  getGlobalRouter()->setDebugSteinerTree(steinerTree);
+  getGlobalRouter()->setDebugRectilinearSTree(rectilinearSTree);
+  getGlobalRouter()->setDebugTree2D(tree2D);
+  getGlobalRouter()->setDebugTree3D(tree3D);
+  getGlobalRouter()->setDebugEdges3D(edges3D);
+}
+
+void set_cugr_debug_cmd(odb::dbNet* net,
+                        bool patternRoute,
+                        bool resAware,
+                        bool detours,
+                        bool maze,
+                        bool rrr)
+{
+  const CugrDebugStages stages{patternRoute, resAware, detours, maze, rrr};
+  GlobalRouter* global_router = getGlobalRouter();
+  // No stages requested disarms; only the drawing needs a GUI and a renderer.
+  if (stages.any() && web::Gui::enabled()
+      && global_router->getDebugCugr() == nullptr) {
+    global_router->initDebugCugr(std::make_unique<CugrRenderer>());
+  }
+  global_router->setDebugCugrNet(net, stages);
+}
+
+void set_global_route_debug_stt_input_filename(const char* file_name)
+{
+  getGlobalRouter()->setSttInputFilename(file_name);
+}
+
+void create_wl_report_file(const char* file_name, bool verbose)
+{
+  getGlobalRouter()->createWLReportFile(file_name, verbose);
+}
+
+void report_net_wire_length(odb::dbNet* net,
+                            bool global_route,
+                            bool detailed_route,
+                            bool verbose,
+                            const char* file_name)
+{
+  getGlobalRouter()->reportNetWireLength(
+      net, global_route, detailed_route, verbose, file_name);
+}
+
+bool have_initial_steiner_wirelengths()
+{
+  return getGlobalRouter()->hasInitialSteinerWirelengths();
+}
+
+void report_net_detour(odb::dbNet* net, const char* file_name)
+{
+  getGlobalRouter()->reportNetDetour(net, file_name);
+}
+
+void report_net_detours(int top_n, const char* file_name)
+{
+  getGlobalRouter()->reportNetDetours(top_n, file_name);
 }
 
 void
-repair_antennas(LibertyPort* diodePort)
+clear_route_guides()
 {
-  getFastRoute()->repairAntennas(diodePort);
+  if (auto* renderer = getGlobalRouter()->getRenderer()) {
+    renderer->clearRoute();
+  }
 }
 
 void
-clear()
+report_layer_wire_lengths(bool global_route, bool detailed_route)
 {
-  getFastRoute()->clear();
+  getGlobalRouter()->reportLayerWireLengths(global_route, detailed_route);
 }
 
-void
-write_guides(char* fileName)
+void write_segments(const char* file_name)
 {
-  getFastRoute()->writeGuides(fileName);
+  getGlobalRouter()->writeSegments(file_name);
 }
 
-void
-highlight_net_route(const odb::dbNet *net)
+void read_segments(const char* file_name)
 {
-  getFastRoute()->highlightRoute(net);
+  getGlobalRouter()->readSegments(file_name);
 }
 
-void
-report_layer_wire_lengths()
+void write_pin_locations(const char* file_name)
 {
-  getFastRoute()->reportLayerWireLengths();
+  getGlobalRouter()->writePinLocations(file_name);
+}
+
+odb::dbObject* iterm_to_object(odb::dbITerm* iterm)
+{
+  return (odb::dbObject*) iterm;
+}
+
+odb::dbObject* bterm_to_object(odb::dbBTerm* bterm)
+{
+  return (odb::dbObject*) bterm;
+}
+
+float estimate_path_resistance(odb::dbObject* pin1,
+                                 odb::dbObject* pin2,
+                                 bool verbose = false)
+{
+  return getGlobalRouter()->estimatePathResistance(pin1, pin2, verbose);
+}
+
+float estimate_path_resistance(odb::dbObject* pin1,
+				 odb::dbObject* pin2,
+				 odb::dbTechLayer* layer1,
+				 odb::dbTechLayer* layer2,
+				 bool verbose = false)
+{
+  return getGlobalRouter()->estimatePathResistance(
+    pin1, pin2, layer1, layer2, verbose);
 }
 
 } // namespace
